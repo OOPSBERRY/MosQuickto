@@ -1,0 +1,1239 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mosquickto 캐릭터</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+<style>
+  :root {
+    --bg: #ececec;
+    --ink: #1c1c1c;
+    --muted: #6b6b6b;
+    --line: #c9c9c9;
+    --panel: #f7f7f7;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: Pretendard, -apple-system, sans-serif;
+    font-weight: 300;
+    overflow: hidden;
+  }
+  #stage { position: fixed; inset: 0; }
+  header {
+    position: fixed; top: 24px; left: 24px;
+    pointer-events: none;
+  }
+  header h1 { font-size: 18px; font-weight: 400; letter-spacing: -0.01em; }
+  header p { margin-top: 4px; font-size: 13px; color: var(--muted); }
+  nav {
+    position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%);
+    display: flex; border: 1px solid var(--line); background: var(--panel);
+    border-radius: 4px; overflow: hidden;
+  }
+  nav button {
+    font: inherit; font-size: 14px; font-weight: 300; color: var(--muted);
+    background: none; border: 0; padding: 10px 20px; cursor: pointer;
+  }
+  nav button + button { border-left: 1px solid var(--line); }
+  nav button.on { color: var(--ink); font-weight: 400; background: #fff; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="stage"></div>
+<header>
+  <h1>Mosquickto 캐릭터</h1>
+  <p>드래그해서 돌려보고, 휠로 확대해 보세요</p>
+</header>
+<nav>
+  <button data-view="both" class="on">함께</button>
+  <button data-view="mosquito">모기</button>
+  <button data-view="penguin">펭귄</button>
+</nav>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { DecalGeometry } from 'three/addons/geometries/DecalGeometry.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+
+/* ---------- 기본 장면 ---------- */
+const stage = document.getElementById('stage');
+const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFShadowMap;
+stage.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0xe9e2d6);
+
+const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.1, 100);
+camera.position.set(0, 6.5, 21);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 2, -1);
+controls.enableDamping = true;
+controls.minDistance = 0.25;
+controls.maxDistance = 32;
+controls.maxPolarAngle = Math.PI * 0.49;
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.6 * Math.PI));
+const sun = new THREE.DirectionalLight(0xffffff, 0.4 * Math.PI);
+sun.position.set(-10.5, 12.6, 19.5);
+sun.castShadow = true;
+sun.shadow.mapSize.set(4096, 4096);
+Object.assign(sun.shadow.camera, { left: -18, right: 18, top: 18, bottom: -18, near: 1, far: 70 });
+sun.shadow.bias = -0.0005;
+sun.shadow.normalBias = 0.02;
+scene.add(sun);
+
+
+/* ---------- 카툰 재질 + 외곽선 ---------- */
+const ramp = new THREE.DataTexture(new Uint8Array([150, 215, 255]), 3, 1, THREE.RedFormat);
+ramp.minFilter = ramp.magFilter = THREE.NearestFilter;
+ramp.needsUpdate = true;
+
+const toon = (color, extra = {}) =>
+  new THREE.MeshToonMaterial({ color, gradientMap: ramp, ...extra });
+
+// 위치(오브젝트 좌표)에 따라 두 번째 색을 섞는 재질
+function twoTone(base, alt, maskGLSL) {
+  const m = toon(base);
+  m.onBeforeCompile = (sh) => {
+    sh.uniforms.altColor = { value: new THREE.Color(alt) };
+    sh.vertexShader = 'varying vec3 vObjPos;\n' + sh.vertexShader.replace(
+      '#include <begin_vertex>', '#include <begin_vertex>\nvObjPos = position;');
+    sh.fragmentShader = 'varying vec3 vObjPos;\nuniform vec3 altColor;\n' + sh.fragmentShader.replace(
+      'vec4 diffuseColor = vec4( diffuse, opacity );',
+      `float altMask = 0.0; { vec3 p = vObjPos; ${maskGLSL} }
+       vec4 diffuseColor = vec4( mix( diffuse, altColor, altMask ), opacity );`);
+  };
+  m.customProgramCacheKey = () => maskGLSL;
+  return m;
+}
+
+let outlineScale = 1;
+const outlineCache = new Map();
+function outlineMat(t) {
+  if (!outlineCache.has(t)) {
+    outlineCache.set(t, new THREE.ShaderMaterial({
+      uniforms: { t: { value: t } },
+      vertexShader: `uniform float t;
+        void main() {
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          mv.xyz += normalize(normalMatrix * normal) * t;
+          gl_Position = projectionMatrix * mv;
+        }`,
+      fragmentShader: `void main() { gl_FragColor = vec4(0.07, 0.07, 0.07, 1.0); }`,
+      side: THREE.BackSide,
+    }));
+  }
+  return outlineCache.get(t);
+}
+
+function add(parent, geo, mat, { outline = 0.014, shadow = true } = {}) {
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.castShadow = shadow;
+  if (outline) mesh.add(new THREE.Mesh(geo, outlineMat(outline * outlineScale)));
+  parent.add(mesh);
+  return mesh;
+}
+
+const UP = new THREE.Vector3(0, 1, 0);
+const v3 = (x, y, z) => new THREE.Vector3(x, y, z);
+const lerp = THREE.MathUtils.lerp;
+
+// p0 → p1 을 잇는 원통(테이퍼 가능)
+function segment(parent, p0, p1, r0, r1, mat, outline) {
+  const dir = p1.clone().sub(p0);
+  const len = dir.length();
+  const m = add(parent, new THREE.CylinderGeometry(r1, r0, len * 1.04, 20), mat, { outline });
+  m.position.copy(p0).add(p1).multiplyScalar(0.5);
+  m.quaternion.setFromUnitVectors(UP, dir.normalize());
+  return m;
+}
+
+function hairs(parent, count, center, radii, accept, mat) {
+  const geo = new THREE.CylinderGeometry(0.006, 0.006, 0.06, 4);
+  let n = 0, guard = 0;
+  while (n < count && guard++ < 5000) {
+    const d = v3(Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1);
+    if (d.lengthSq() > 1 || d.lengthSq() < 0.01) continue;
+    d.normalize();
+    if (!accept(d)) continue;
+    const h = new THREE.Mesh(geo, mat);
+    h.position.set(d.x * radii.x, d.y * radii.y, d.z * radii.z).add(center);
+    h.quaternion.setFromUnitVectors(UP, d);
+    parent.add(h);
+    n++;
+  }
+}
+
+/* ---------- 모기 ---------- */
+function buildMosquito() {
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
+
+  const skin = toon(0xf2c4aa);
+  const band = toon(0xa8937f);
+  const dark = toon(0x1d1d1d);
+  const thoraxMat = toon(0x9e8a79);
+  const peach = toon(0xe9b79d);
+  const red = toon(0xb0362a);
+  const white = toon(0xffffff);
+
+  // 머리
+  add(body, new THREE.SphereGeometry(0.5, 64, 48), skin, { outline: 0.016 });
+
+  // 머리 위에서 앞으로 내려오는 마디 띠
+  const R = 0.47, N = 11, a0 = 0.12, a1 = 2.25;
+  const arc = (a) => v3(-Math.sin(a) * R, Math.cos(a) * R, 0);
+  for (let i = 0; i < N; i++) {
+    const s = lerp(a0, a1, i / N), e = lerp(a0, a1, (i + 1) / N);
+    segment(body, arc(s), arc(e), 0.09, 0.09, band, 0.009);
+  }
+
+  // 길쭉한 주둥이
+  const nose = new THREE.CatmullRomCurve3([
+    arc(a1), v3(-0.58, -0.6, 0), v3(-0.78, -0.95, 0), v3(-0.95, -1.25, 0), v3(-1.08, -1.52, 0),
+  ]);
+  const M = 15;
+  for (let i = 0; i < M; i++) {
+    const t0 = i / M, t1 = (i + 1) / M;
+    segment(body, nose.getPointAt(t0), nose.getPointAt(t1),
+      lerp(0.085, 0.012, t0), lerp(0.085, 0.012, t1), band, 0.008);
+  }
+
+  // 멍한 눈
+  for (const s of [-1, 1]) {
+    const dir = v3(-0.82, 0.1, s * 0.52).normalize();
+    const c = dir.clone().multiplyScalar(0.43);
+    const eye = add(body, new THREE.SphereGeometry(0.155, 40, 24), white, { outline: 0.012 });
+    eye.position.copy(c);
+    const look = dir.clone().add(v3(0, 0.12, -s * 0.28)).normalize();
+    const pupil = add(body, new THREE.SphereGeometry(0.075, 32, 16), dark, { outline: 0 });
+    pupil.position.copy(c).addScaledVector(look, 0.1);
+    const glint = new THREE.Mesh(new THREE.SphereGeometry(0.018, 12, 8), white);
+    glint.position.copy(pupil.position).addScaledVector(look, 0.07).add(v3(0, 0.025, s * 0.02));
+    body.add(glint);
+  }
+
+  // 머리털
+  hairs(body, 70, v3(0, 0, 0), v3(0.5, 0.5, 0.5),
+    (d) => (d.x > -0.25 || d.y > 0.72) && Math.abs(d.z) > 0.12, dark);
+
+  // 깃털 더듬이
+  for (const s of [-1, 1]) {
+    const curve = new THREE.CatmullRomCurve3([
+      v3(-0.06, 0.46, s * 0.09), v3(-0.1, 0.72, s * 0.17), v3(-0.18, 0.95, s * 0.3),
+    ]);
+    add(body, new THREE.TubeGeometry(curve, 24, 0.012, 6), dark, { outline: 0 });
+    for (let t = 0.25; t <= 1.0; t += 0.075) {
+      const p = curve.getPointAt(t);
+      const tan = curve.getTangentAt(t);
+      const side = new THREE.Vector3().crossVectors(tan, v3(0, 0, 1)).normalize();
+      const len = 0.075 * (1.15 - t * 0.5);
+      for (const k of [-1, 1]) {
+        const d = side.clone().multiplyScalar(k).addScaledVector(tan, 0.7).normalize();
+        segment(body, p, p.clone().addScaledVector(d, len), 0.006, 0.004, dark, 0);
+      }
+    }
+  }
+
+  // 가슴, 잘록한 허리, 빨간 배
+  const thorax = add(body, new THREE.SphereGeometry(1, 48, 32), thoraxMat, { outline: 0.014 });
+  thorax.position.set(0.62, -0.05, 0);
+  thorax.scale.set(0.36, 0.3, 0.3);
+  hairs(body, 40, thorax.position, v3(0.36, 0.3, 0.3), (d) => d.y > 0.1, dark);
+
+  const waist = add(body, new THREE.SphereGeometry(1, 32, 24), peach, { outline: 0.012 });
+  waist.position.set(0.96, -0.07, 0);
+  waist.scale.set(0.14, 0.22, 0.22);
+
+  const belly = new THREE.Group();
+  belly.position.set(1.58, -0.14, 0);
+  belly.rotation.z = -0.14;
+  body.add(belly);
+  const ab = add(belly, new THREE.SphereGeometry(1, 64, 40), red, { outline: 0.016 });
+  ab.scale.set(0.66, 0.44, 0.44);
+  const ringMat = toon(0x5c1a12);
+  for (const k of [-0.55, -0.25, 0.05, 0.35, 0.62]) {
+    const r = 0.44 * Math.sqrt(1 - k * k) + 0.003;
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(r, 0.011, 8, 72), ringMat);
+    ring.position.x = k * 0.66;
+    ring.rotation.y = Math.PI / 2;
+    ring.rotation.x = 0.18;
+    belly.add(ring);
+  }
+
+  // 날개
+  const wingShape = new THREE.Shape();
+  wingShape.absellipse(0.66, 0, 0.66, 0.17, 0, Math.PI * 2, false, 0);
+  const wingGeo = new THREE.ShapeGeometry(wingShape, 48);
+  const wingMat = toon(0xc7ccd1, { transparent: true, opacity: 0.78, side: THREE.DoubleSide, depthWrite: false });
+  const edgePts = wingShape.getPoints(80).map((p) => v3(p.x, p.y, 0));
+  const lineMat = new THREE.LineBasicMaterial({ color: 0x222222 });
+  const strokes = [];
+  for (let i = 0; i < 9; i++) {
+    const x = 0.2 + i * 0.11, y = i % 2 ? 0.05 : -0.04;
+    strokes.push(v3(x, y, 0), v3(x + 0.08, y + 0.015, 0));
+  }
+  const wings = [];
+  for (const s of [-1, 1]) {
+    const pivot = new THREE.Group();
+    pivot.position.set(0.6, 0.2, s * 0.08);
+    const blade = new THREE.Group();
+    blade.rotation.z = s > 0 ? 0.62 : 0.78;
+    blade.add(new THREE.Mesh(wingGeo, wingMat));
+    blade.add(new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(edgePts), lineMat));
+    blade.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(strokes), lineMat));
+    pivot.add(blade);
+    body.add(pivot);
+    wings.push({ pivot, s });
+  }
+
+  // 가느다란 다리 6개
+  const legs = [];
+  const xs = [0.44, 0.6, 0.76], dx = [-0.55, -0.05, 0.5];
+  for (const s of [-1, 1]) {
+    for (let i = 0; i < 3; i++) {
+      const x = xs[i], d = dx[i];
+      const curve = new THREE.CatmullRomCurve3([
+        v3(x, -0.2, s * 0.1),
+        v3(x + d * 0.45, -0.16, s * 0.42),
+        v3(x + d * 0.85, -0.7, s * 0.55),
+        v3(x + d * 1.1, -1.25, s * 0.6),
+      ], false, 'centripetal');
+      const leg = add(body, new THREE.TubeGeometry(curve, 40, 0.017, 8), dark, { outline: 0.006 });
+      legs.push({ leg, phase: i * 1.3 + (s > 0 ? 0.6 : 0) });
+    }
+  }
+
+  root.userData.update = (t) => {
+    body.position.y = Math.sin(t * 2.2) * 0.09;
+    body.rotation.z = Math.sin(t * 1.7) * 0.04;
+    body.rotation.x = Math.sin(t * 1.3) * 0.03;
+    const flap = Math.sin(t * 32);
+    for (const w of wings) w.pivot.rotation.x = w.s * (0.75 + flap * 0.55);
+    for (const l of legs) l.leg.rotation.x = Math.sin(t * 2 + l.phase) * 0.03;
+  };
+  return root;
+}
+
+/* ---------- SDF → 메시 (매끈하게 이어지는 형태용) ---------- */
+const clamp = (x, a, b) => (x < a ? a : x > b ? b : x);
+const sstep = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
+const smin = (a, b, k) => { const h = clamp(0.5 + 0.5 * (b - a) / k, 0, 1); return b + (a - b) * h - k * h * (1 - h); };
+const smax = (a, b, k) => -smin(-a, -b, k);
+
+function ell(x, y, z, rx, ry, rz) {
+  const ax = x / rx, ay = y / ry, az = z / rz;
+  const bx = ax / rx, by = ay / ry, bz = az / rz;
+  const k0 = Math.sqrt(ax * ax + ay * ay + az * az);
+  const k1 = Math.sqrt(bx * bx + by * by + bz * bz) || 1e-9;
+  return (k0 * (k0 - 1)) / k1;
+}
+function frame(u, up) {
+  const U = u.clone().normalize();
+  const N = up.clone().addScaledVector(U, -up.dot(U)).normalize();
+  const W = new THREE.Vector3().crossVectors(U, N);
+  return { U, N, W };
+}
+function oell(c, F, ru, rn, rw) {
+  return (x, y, z) => {
+    const dx = x - c.x, dy = y - c.y, dz = z - c.z;
+    return ell(
+      dx * F.U.x + dy * F.U.y + dz * F.U.z,
+      dx * F.N.x + dy * F.N.y + dz * F.N.z,
+      dx * F.W.x + dy * F.W.y + dz * F.W.z, ru, rn, rw);
+  };
+}
+
+// Surface Nets: 표면 근처만 촘촘히 계산하고, 꼭짓점은 실제 곡면 위로 끌어당긴다
+function polygonize(f, bmin, bmax, h) {
+  const nx = Math.ceil((bmax[0] - bmin[0]) / h) + 1;
+  const ny = Math.ceil((bmax[1] - bmin[1]) / h) + 1;
+  const nz = Math.ceil((bmax[2] - bmin[2]) / h) + 1;
+  const C = 4;
+  const cx = Math.ceil((nx - 1) / C) + 1, cy = Math.ceil((ny - 1) / C) + 1, cz = Math.ceil((nz - 1) / C) + 1;
+  const coarse = new Float32Array(cx * cy * cz);
+  for (let k = 0; k < cz; k++) for (let j = 0; j < cy; j++) for (let i = 0; i < cx; i++) {
+    coarse[i + cx * (j + cy * k)] = f(
+      bmin[0] + Math.min(i * C, nx - 1) * h,
+      bmin[1] + Math.min(j * C, ny - 1) * h,
+      bmin[2] + Math.min(k * C, nz - 1) * h);
+  }
+  const band = 7 * h;
+  const val = new Float32Array(nx * ny * nz);
+  const id = (i, j, k) => i + nx * (j + ny * k);
+  for (let k = 0; k < nz; k++) {
+    const ck = Math.min(Math.round(k / C), cz - 1);
+    for (let j = 0; j < ny; j++) {
+      const cj = Math.min(Math.round(j / C), cy - 1);
+      for (let i = 0; i < nx; i++) {
+        const vc = coarse[Math.min(Math.round(i / C), cx - 1) + cx * (cj + cy * ck)];
+        val[id(i, j, k)] = Math.abs(vc) > band ? vc : f(bmin[0] + i * h, bmin[1] + j * h, bmin[2] + k * h);
+      }
+    }
+  }
+
+  const mx = nx - 1, my = ny - 1;
+  const cell = new Int32Array(mx * my * (nz - 1)).fill(-1);
+  const cid = (i, j, k) => i + mx * (j + my * k);
+  const corner = [[0, 0, 0], [1, 0, 0], [0, 1, 0], [1, 1, 0], [0, 0, 1], [1, 0, 1], [0, 1, 1], [1, 1, 1]];
+  const edges = [[0, 1], [2, 3], [4, 5], [6, 7], [0, 2], [1, 3], [4, 6], [5, 7], [0, 4], [1, 5], [2, 6], [3, 7]];
+  const cv = new Float32Array(8);
+  const pos = [];
+  for (let k = 0; k < nz - 1; k++) for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
+    let inside = 0;
+    for (let c = 0; c < 8; c++) {
+      const o = corner[c];
+      cv[c] = val[id(i + o[0], j + o[1], k + o[2])];
+      if (cv[c] < 0) inside++;
+    }
+    if (inside === 0 || inside === 8) continue;
+    let sx = 0, sy = 0, sz = 0, n = 0;
+    for (const [a, b] of edges) {
+      if ((cv[a] < 0) === (cv[b] < 0)) continue;
+      const t = cv[a] / (cv[a] - cv[b]);
+      const A = corner[a], B = corner[b];
+      sx += A[0] + (B[0] - A[0]) * t; sy += A[1] + (B[1] - A[1]) * t; sz += A[2] + (B[2] - A[2]) * t; n++;
+    }
+    cell[cid(i, j, k)] = pos.length / 3;
+    pos.push(bmin[0] + (i + sx / n) * h, bmin[1] + (j + sy / n) * h, bmin[2] + (k + sz / n) * h);
+  }
+
+  const index = [];
+  const quad = (a, b, c, d, flip) => {
+    if (a < 0 || b < 0 || c < 0 || d < 0) return;
+    if (flip) index.push(a, c, b, a, d, c); else index.push(a, b, c, a, c, d);
+  };
+  for (let k = 1; k < nz - 1; k++) for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
+    const in0 = val[id(i, j, k)] < 0;
+    if (in0 !== (val[id(i + 1, j, k)] < 0))
+      quad(cell[cid(i, j - 1, k - 1)], cell[cid(i, j, k - 1)], cell[cid(i, j, k)], cell[cid(i, j - 1, k)], !in0);
+    if (in0 !== (val[id(i, j + 1, k)] < 0))
+      quad(cell[cid(i - 1, j, k - 1)], cell[cid(i - 1, j, k)], cell[cid(i, j, k)], cell[cid(i, j, k - 1)], !in0);
+    if (in0 !== (val[id(i, j, k + 1)] < 0))
+      quad(cell[cid(i - 1, j - 1, k)], cell[cid(i, j - 1, k)], cell[cid(i, j, k)], cell[cid(i - 1, j, k)], !in0);
+  }
+
+  // 곡면 위로 투영 + 기울기로 법선 계산
+  const e = h * 0.3;
+  const g = [0, 0, 0];
+  const grad = (x, y, z) => {
+    const a = f(x + e, y - e, z - e), b = f(x - e, y - e, z + e);
+    const c = f(x - e, y + e, z - e), d = f(x + e, y + e, z + e);
+    g[0] = (a - b - c + d) / (4 * e); g[1] = (-a - b + c + d) / (4 * e); g[2] = (-a + b - c + d) / (4 * e);
+    return (a + b + c + d) / 4;
+  };
+  const nrm = new Float32Array(pos.length);
+  for (let v = 0; v < pos.length; v += 3) {
+    let x = pos[v], y = pos[v + 1], z = pos[v + 2];
+    for (let it = 0; it < 2; it++) {
+      const d = grad(x, y, z);
+      const l2 = g[0] * g[0] + g[1] * g[1] + g[2] * g[2] || 1;
+      const s = clamp(d / l2, -h, h);
+      x -= g[0] * s; y -= g[1] * s; z -= g[2] * s;
+    }
+    grad(x, y, z);
+    const l = Math.hypot(g[0], g[1], g[2]) || 1;
+    pos[v] = x; pos[v + 1] = y; pos[v + 2] = z;
+    nrm[v] = g[0] / l; nrm[v + 1] = g[1] / l; nrm[v + 2] = g[2] / l;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  geo.setIndex(index);
+  return geo;
+}
+
+/* ---------- 펭귄 ---------- */
+// 펼친 날개가 위아래로 흔들리도록 정점을 굽히는 셰이더 조각
+const wave = { value: 0 };
+const BEND = `
+uniform float uWave;
+float bendW(vec3 p) { return (1.0 - smoothstep(-0.95, -0.5, p.x)) * smoothstep(0.9, 1.25, p.y); }
+vec3 bendP(vec3 p) {
+  float a = uWave * bendW(p); float c = cos(a), s = sin(a);
+  vec2 d = p.xy - vec2(-0.5, 1.4);
+  return vec3(vec2(-0.5, 1.4) + vec2(c * d.x - s * d.y, s * d.x + c * d.y), p.z);
+}
+vec3 bendN(vec3 p, vec3 n) {
+  float a = uWave * bendW(p); float c = cos(a), s = sin(a);
+  return vec3(c * n.x - s * n.y, s * n.x + c * n.y, n.z);
+}
+`;
+function withBend(mat) {
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uWave = wave;
+    sh.vertexShader = BEND + sh.vertexShader
+      .replace('#include <beginnormal_vertex>', 'vec3 objectNormal = bendN(position, normal);')
+      .replace('#include <begin_vertex>', 'vec3 transformed = bendP(position);');
+  };
+  mat.customProgramCacheKey = () => 'bend';
+  return mat;
+}
+function bentOutline(t) {
+  return new THREE.ShaderMaterial({
+    uniforms: { t: { value: t }, uWave: wave },
+    vertexShader: BEND + `uniform float t;
+      void main() {
+        vec4 mv = modelViewMatrix * vec4(bendP(position), 1.0);
+        mv.xyz += normalize(normalMatrix * bendN(position, normal)) * t;
+        gl_Position = projectionMatrix * mv;
+      }`,
+    fragmentShader: `void main() { gl_FragColor = vec4(0.07, 0.07, 0.07, 1.0); }`,
+    side: THREE.BackSide,
+  });
+}
+
+// 밝은 면 / 회색 그림자 두 단계만 쓰는 셀 셰이딩
+function stepRamp(cut) {
+  const n = 64, data = new Uint8Array(n);
+  for (let i = 0; i < n; i++) data[i] = ((i + 0.5) / n) * 2 - 1 < cut ? 0 : 255;
+  const t = new THREE.DataTexture(data, n, 1, THREE.RedFormat);
+  t.minFilter = t.magFilter = THREE.NearestFilter;
+  t.needsUpdate = true;
+  return t;
+}
+
+// 얼굴 그림 (눈, 눈썹, 볼, 입) — 원본 일러스트 비율을 그대로 옮김
+const FACE = { cx: 0, cy: 1.7, span: 1.2 };
+function drawFace(closed) {
+  const S = 2048, k = S / FACE.span;
+  const c = document.createElement('canvas');
+  c.width = c.height = S;
+  const g = c.getContext('2d');
+  const X = (x) => (x - FACE.cx + FACE.span / 2) * k;
+  const Y = (y) => (FACE.cy + FACE.span / 2 - y) * k;
+  const L = (l) => l * k;
+  const ink = '#121212', lw = L(0.0085);
+  g.lineCap = 'round'; g.lineJoin = 'round';
+
+  // 볼터치
+  g.fillStyle = 'rgba(236, 138, 140, 0.48)';
+  for (const s of [-1, 1]) {
+    g.beginPath(); g.ellipse(X(s * 0.37), Y(1.585), L(0.088), L(0.04), 0, 0, Math.PI * 2); g.fill();
+  }
+
+  // 눈썹 + 아래로 살짝 비친 그림자
+  const brow = (s, dx, dy) => {
+    const x = s * 0.235 + dx, y = 1.99 + dy;
+    g.beginPath(); g.moveTo(X(x - 0.085), Y(y - 0.012));
+    g.quadraticCurveTo(X(x), Y(y + 0.052), X(x + 0.085), Y(y - 0.016));
+  };
+  for (const s of [-1, 1]) {
+    brow(s, 0.01, -0.012); g.strokeStyle = '#cfcfcf'; g.lineWidth = lw * 1.8; g.stroke();
+    brow(s, 0, 0); g.strokeStyle = ink; g.lineWidth = lw * 1.05; g.stroke();
+  }
+
+  // 눈
+  for (const s of [-1, 1]) {
+    const ex = X(s * 0.235), ey = Y(1.75);
+    if (closed) {
+      g.beginPath(); g.arc(ex, Y(1.71), L(0.1), Math.PI * 1.12, Math.PI * 1.88);
+      g.strokeStyle = '#262626'; g.lineWidth = L(0.045); g.stroke();
+    } else {
+      g.beginPath(); g.arc(ex, ey, L(0.13), 0, Math.PI * 2);
+      g.fillStyle = '#262626'; g.fill(); g.strokeStyle = ink; g.lineWidth = lw; g.stroke();
+      g.beginPath(); g.arc(ex, ey, L(0.064), 0, Math.PI * 2);
+      g.fillStyle = '#ffffff'; g.fill(); g.stroke();
+    }
+  }
+
+  // 입
+  const top = 1.575;
+  const mouth = () => {
+    g.beginPath();
+    g.moveTo(X(-0.14), Y(top));
+    g.bezierCurveTo(X(-0.165), Y(1.49), X(-0.065), Y(1.322), X(0), Y(1.322));
+    g.bezierCurveTo(X(0.065), Y(1.322), X(0.165), Y(1.49), X(0.14), Y(top));
+    g.ellipse(X(0), Y(top), L(0.14), L(0.026), 0, 0, Math.PI, true);
+    g.closePath();
+  };
+  mouth(); g.fillStyle = '#d6605c'; g.fill();
+  g.save(); mouth(); g.clip();
+  g.fillStyle = '#bd4c48';
+  g.beginPath(); g.moveTo(X(0.0), Y(1.6)); g.lineTo(X(0.2), Y(1.6)); g.lineTo(X(0.2), Y(1.43)); g.lineTo(X(0.05), Y(1.5)); g.fill();
+  const tongue = () => {
+    g.beginPath(); g.moveTo(X(-0.2), Y(1.415));
+    g.quadraticCurveTo(X(0), Y(1.53), X(0.2), Y(1.425));
+    g.lineTo(X(0.2), Y(1.2)); g.lineTo(X(-0.2), Y(1.2)); g.closePath();
+  };
+  tongue(); g.fillStyle = '#f3b5b3'; g.fill();
+  g.save(); tongue(); g.clip();
+  g.fillStyle = '#de908d'; g.fillRect(X(0.035), Y(1.6), L(0.3), L(0.4));
+  g.restore();
+  g.beginPath(); g.moveTo(X(-0.2), Y(1.415)); g.quadraticCurveTo(X(0), Y(1.53), X(0.2), Y(1.425));
+  g.strokeStyle = ink; g.lineWidth = lw; g.stroke();
+  g.restore();
+  g.beginPath(); g.ellipse(X(0), Y(top), L(0.128), L(0.02), 0, 0, Math.PI * 2);
+  g.fillStyle = '#ffffff'; g.fill(); g.strokeStyle = ink; g.lineWidth = lw; g.stroke();
+  mouth(); g.stroke();
+
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 8;
+  return tex;
+}
+
+function buildPenguin() {
+  const root = new THREE.Group();
+  const body = new THREE.Group();
+  root.add(body);
+
+  // --- 형태 정의 ---
+  // 손 흔드는 날개 (몸에서 굵게 뻗어 나와 끝이 둥근 노 모양)
+  const fDir = v3(-0.87, 0.07, 0.48).normalize();
+  const fRoot = v3(-0.46, 1.4, 0.06);
+  const FL = frame(fDir, v3(0, 1, -0.38));
+  const fC = fRoot.clone().addScaledVector(fDir, 0.42);
+  // 뿌리 쪽은 아래로 두툼하게, 끝으로 갈수록 얇아지는 날개
+  const flipA = (x, y, z) => {
+    const dx = x - fRoot.x, dy = y - fRoot.y, dz = z - fRoot.z;
+    const a = dx * FL.U.x + dy * FL.U.y + dz * FL.U.z;
+    const b = dx * FL.N.x + dy * FL.N.y + dz * FL.N.z;
+    const c = dx * FL.W.x + dy * FL.W.y + dz * FL.W.z;
+    const s = clamp(a / 0.75, 0, 1);
+    const rn = 0.068 + 0.24 * (1 - s) * (1 - s);
+    return ell(a - 0.3, b + (rn - 0.068), c, 0.5, rn, 0.19);
+  };
+  const flipB = oell(fRoot.clone().addScaledVector(fDir, 0.7), FL, 0.12, 0.058, 0.15);
+
+  // 유령 같은 아랫단
+
+  const torso = (x, y, z) => {
+    let d = ell(x, y - 1.72, z, 0.58, 0.6, 0.56);               // 머리
+    d = smin(d, ell(x, y - 0.95, z, 0.74, 0.8, 0.63), 0.3);      // 아래로 넓게 퍼지는 몸
+    d = smin(d, ell(x, y - 0.4, z, 0.62, 0.4, 0.53), 0.4);       // 넓적한 밑면
+    d = smax(d, -ell(x + 0.02, y + 0.02, z, 0.085, 0.25, 1.2), 0.1); // 앞뒤로 지나는 홈 → 둥근 발 두 개
+    d = smin(d, smin(flipA(x, y, z), flipB(x, y, z), 0.08), 0.2); // 날개가 몸으로 부드럽게 흘러듦
+    return d;
+  };
+
+  // 검은 후드 영역 (양수 = 검정)
+  const FN = FL.N;
+  const hoodK = (x, y, z) => {
+    const az = Math.atan2(x, z);
+    const yF = 1.13 + 0.27 * sstep(-0.1, -0.7, x);              // 얼굴 아래 칼라선
+    const Kb = smin((Math.abs(az) - 1.55) * Math.hypot(x, z), y - 0.1, 0.04); // 등은 발끝까지 검정
+    let K = smax(y - yF, Kb, 0.03);
+    const zf = sstep(-0.42, -0.62, x) * sstep(0.85, 1.05, y);   // 날개: 윗면만 검정
+    if (zf > 0) {
+      const kf = (x - fC.x) * FN.x + (y - fC.y) * FN.y + (z - fC.z) * FN.z + 0.012;
+      K += (kf - K) * zf;
+    }
+    const fx = x / 0.5, fy = (y - 1.74) / 0.45;                 // 넓은 얼굴
+    let hole = (Math.sqrt(fx * fx + fy * fy) - 1) * 0.45;
+    const cx = x / 0.09, cy = (y - 1.295) / 0.04;               // 입 아래 작은 턱
+    hole = smin(hole, (Math.sqrt(cx * cx + cy * cy) - 1) * 0.04, 0.03);
+    hole = Math.max(hole, 0.05 - z);
+    return smin(K, hole, 0.015);
+  };
+  const T = 0.045;
+  const hood = (x, y, z) => smax(torso(x, y, z) - T, -hoodK(x, y, z), 0.012);
+
+  // 옆에 내린 날개
+  const rRoot = v3(0.56, 1.22, 0.33);
+  const FR = frame(v3(0.2, -1, 0.04), v3(0.84, 0.1, 0.55));
+  const rA = oell(rRoot.clone().addScaledVector(FR.U, 0.2), FR, 0.24, 0.075, 0.14);
+  const rB = oell(rRoot.clone().addScaledVector(FR.U, 0.45), FR, 0.2, 0.09, 0.19);
+  const rFlip = (x, y, z) => smin(rA(x, y, z), rB(x, y, z), 0.1);
+
+  // --- 메시 ---
+  const H = 0.014;
+  const bodyGeo = polygonize(torso, [-1.32, -0.08, -0.75], [0.9, 2.4, 0.8], H);
+  const hoodGeo = polygonize(hood, [-1.38, -0.1, -0.82], [0.92, 2.42, 0.9], H);
+  const rGeo = polygonize(rFlip, [0.25, 0.45, 0.0], [1.0, 1.45, 0.7], H * 0.8);
+
+  const ramp2 = stepRamp(0.26);
+  const depth = () => withBend(new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking }));
+
+  const white = new THREE.Mesh(bodyGeo, withBend(toon(0xffffff, { gradientMap: ramp2 })));
+  white.castShadow = white.receiveShadow = true;
+  white.customDepthMaterial = depth();
+  white.add(new THREE.Mesh(bodyGeo, bentOutline(0.01)));
+  body.add(white);
+
+  const black = new THREE.Mesh(hoodGeo, withBend(toon(0x262626, { gradientMap: ramp2 })));
+  black.castShadow = black.receiveShadow = true;
+  black.customDepthMaterial = depth();
+  black.add(new THREE.Mesh(hoodGeo, bentOutline(0.009)));
+  body.add(black);
+
+  const n = FR.N;
+  const rMat = twoTone(0xffffff, 0x262626, `
+    float d = dot(p - vec3(${rRoot.x}, ${rRoot.y}, ${rRoot.z}), vec3(${n.x}, ${n.y}, ${n.z})) + 0.03;
+    float w = fwidth(d) + 1e-4;
+    altMask = smoothstep(-w, w, d);
+  `);
+  rMat.gradientMap = ramp2;
+  const rPivot = new THREE.Group();
+  rPivot.position.copy(rRoot);
+  const rMesh = new THREE.Mesh(rGeo, rMat);
+  rMesh.position.copy(rRoot).negate();
+  rMesh.castShadow = rMesh.receiveShadow = true;
+  rMesh.add(new THREE.Mesh(rGeo, outlineMat(0.009)));
+  rPivot.add(rMesh);
+  body.add(rPivot);
+
+  // 얼굴 그림을 곡면에 그대로 투영
+  const faceOpen = drawFace(false), faceShut = drawFace(true);
+  // 정면 카메라에서 눈이 동그랗게 보이도록 살짝 비스듬히 투영
+  const faceGeo = new DecalGeometry(white, v3(Math.sin(0.15) * 0.6 - 0.06, FACE.cy, Math.cos(0.15) * 0.6), new THREE.Euler(0, 0.15, 0), v3(FACE.span, FACE.span, 1));
+  const faceMat = toon(0xffffff, {
+    gradientMap: ramp2, map: faceOpen, transparent: true, depthWrite: false,
+    polygonOffset: true, polygonOffsetFactor: -4,
+  });
+  const face = new THREE.Mesh(faceGeo, faceMat);
+  face.receiveShadow = true;
+  body.add(face);
+
+  const q = new THREE.Quaternion();
+  let nextBlink = 2.2;
+  root.userData.update = (t) => {
+    body.position.y = Math.abs(Math.sin(t * 2.4)) * 0.05;
+    body.rotation.z = Math.sin(t * 1.2) * 0.03;
+    wave.value = -0.04 + Math.sin(t * 4.5) * 0.13;
+    rPivot.quaternion.copy(q.setFromAxisAngle(FR.W, Math.sin(t * 2.4) * 0.05));
+    if (t > nextBlink + 0.14) nextBlink = t + 2.5 + Math.random() * 2.5;
+    faceMat.map = t > nextBlink ? faceShut : faceOpen;
+  };
+  return root;
+}
+
+/* ---------- 아늑한 초등학생 방 ---------- */
+// 인형의 집처럼: 벽은 안쪽만 보이게 해서 카메라 쪽 벽은 저절로 사라진다
+// 바닥 면적은 처음보다 1.5배, 가구 크기는 그대로
+const ROOM = { minX: -12, maxX: 12, minZ: -9, maxZ: 12, h: 7 };
+
+function canvasTex(w, h, draw, repeat) {
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  if (repeat) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(...repeat); }
+  return t;
+}
+const rbox = (w, h, d, r = 0.06) => new RoundedBoxGeometry(w, h, d, 3, Math.min(r, w / 2, h / 2, d / 2));
+function put(parent, geo, mat, pos, { outline = 0.018, rot, shadow = true } = {}) {
+  const m = add(parent, geo, typeof mat === 'number' ? toon(mat) : mat, { outline, shadow });
+  m.position.set(...pos);
+  if (rot) m.rotation.set(...rot);
+  m.receiveShadow = true;
+  return m;
+}
+
+function buildRoom() {
+  const room = new THREE.Group();
+  const { minX, maxX, minZ, maxZ, h } = ROOM;
+  const W = maxX - minX, D = maxZ - minZ, cx = (minX + maxX) / 2, cz = (minZ + maxZ) / 2;
+
+  // 나무 마룻바닥
+  const floorTex = canvasTex(1024, 1024, (g, w, hh) => {
+    const n = 8, pw = w / n;
+    for (let i = 0; i < n; i++) {
+      let y = -((i * 397) % 600);
+      while (y < hh) {
+        const len = 520 + ((i * 131 + y) % 300);
+        const tone = ['#cf9f6e', '#c8976a', '#d4a676', '#c4936a'][(i + Math.floor(y / 97)) & 3];
+        g.fillStyle = tone; g.fillRect(i * pw, y, pw, len);
+        g.fillStyle = 'rgba(120,80,45,0.12)';
+        for (let k = 0; k < 5; k++) g.fillRect(i * pw + 10 + k * 22, y + 30, 2, len - 60);
+        g.fillStyle = '#9c6f47'; g.fillRect(i * pw, y + len - 3, pw, 3);
+        y += len;
+      }
+      g.fillStyle = '#9c6f47'; g.fillRect(i * pw, 0, 3, hh);
+    }
+  }, [W / 4, D / 4]);
+  const floor = new THREE.Mesh(new THREE.PlaneGeometry(W, D).rotateX(-Math.PI / 2), toon(0xffffff, { map: floorTex }));
+  floor.position.set(cx, 0, cz);
+  floor.receiveShadow = true;
+  room.add(floor);
+
+  // 크림색 물방울 벽지
+  const wallTex = canvasTex(256, 256, (g, w) => {
+    g.fillStyle = '#f2e6d2'; g.fillRect(0, 0, w, w);
+    g.fillStyle = '#e8d6bb';
+    for (const [x, y] of [[64, 64], [192, 192]]) { g.beginPath(); g.arc(x, y, 9, 0, Math.PI * 2); g.fill(); }
+  }, [1, 1]);
+  const wall = (len, pos, rotY) => {
+    const t = wallTex.clone(); t.needsUpdate = true; t.repeat.set(len / 1.4, h / 1.4);
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(len, h), toon(0xffffff, { map: t }));
+    m.position.set(pos[0], h / 2, pos[1]); m.rotation.y = rotY; m.receiveShadow = true;
+    room.add(m);
+  };
+  wall(W, [cx, minZ], 0);
+  wall(W, [cx, maxZ], Math.PI);
+  wall(D, [minX, cz], Math.PI / 2);
+  wall(D, [maxX, cz], -Math.PI / 2);
+  const ceil = new THREE.Mesh(new THREE.PlaneGeometry(W, D).rotateX(Math.PI / 2), toon(0xf7efe2));
+  ceil.position.set(cx, h, cz);
+  room.add(ceil);
+
+  // 걸레받이
+  const trim = 0xffffff;
+  put(room, rbox(W, 0.28, 0.08, 0.02), trim, [cx, 0.14, minZ + 0.04], { outline: 0.01 });
+  put(room, rbox(0.08, 0.28, D, 0.02), trim, [minX + 0.04, 0.14, cz], { outline: 0.01 });
+  put(room, rbox(0.08, 0.28, D, 0.02), trim, [maxX - 0.04, 0.14, cz], { outline: 0.01 });
+
+  // 동그란 러그
+  const rugTex = canvasTex(1024, 1024, (g, w) => {
+    const cols = ['#a9c4a0', '#f4ead8', '#e7b8a4', '#f4ead8', '#a9c4a0', '#f4ead8', '#f1cf7a', '#f4ead8'];
+    for (let i = 0; i < cols.length; i++) {
+      g.fillStyle = cols[i]; g.beginPath(); g.arc(w / 2, w / 2, w / 2 - i * (w / 2 / cols.length), 0, Math.PI * 2); g.fill();
+    }
+  });
+  const rug = new THREE.Mesh(new THREE.CircleGeometry(5.1, 96).rotateX(-Math.PI / 2), toon(0xffffff, { map: rugTex }));
+  rug.position.set(0, 0.012, 0.9);
+  rug.receiveShadow = true;
+  room.add(rug);
+
+  // 창문 + 하늘 + 커튼
+  const win = new THREE.Group();
+  win.position.set(0.5, 3.0, minZ + 0.02);
+  room.add(win);
+  const sky = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 2.2), new THREE.MeshBasicMaterial({ color: 0xbfdff0 }));
+  win.add(sky);
+  const cloudMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  for (const [x, y, s] of [[-0.8, 0.45, 1], [0.75, -0.2, 0.8]]) {
+    for (const [dx, dy, r] of [[0, 0, 0.22], [0.25, 0.06, 0.28], [0.52, 0, 0.2], [0.26, -0.08, 0.2]]) {
+      const c = new THREE.Mesh(new THREE.CircleGeometry(r * s, 32), cloudMat);
+      c.position.set(x + dx * s, y + dy * s, 0.005);
+      win.add(c);
+    }
+  }
+  const sunDisc = new THREE.Mesh(new THREE.CircleGeometry(0.22, 32), new THREE.MeshBasicMaterial({ color: 0xf6d36b }));
+  sunDisc.position.set(1.15, 0.65, 0.004);
+  win.add(sunDisc);
+  const frameC = 0xffffff;
+  put(win, rbox(3.5, 0.16, 0.16), frameC, [0, 1.18, 0.06]);
+  put(win, rbox(3.5, 0.16, 0.16), frameC, [0, -1.18, 0.06]);
+  put(win, rbox(0.16, 2.5, 0.16), frameC, [-1.67, 0, 0.06]);
+  put(win, rbox(0.16, 2.5, 0.16), frameC, [1.67, 0, 0.06]);
+  put(win, rbox(0.08, 2.2, 0.08), frameC, [0, 0, 0.05]);
+  put(win, rbox(3.2, 0.08, 0.08), frameC, [0, 0.1, 0.05]);
+  put(win, rbox(3.9, 0.12, 0.45), frameC, [0, -1.3, 0.2]);           // 창턱
+  put(win, new THREE.CylinderGeometry(0.035, 0.035, 4.6, 12), 0xb8875a, [0, 1.45, 0.25], { rot: [0, 0, Math.PI / 2] });
+  for (const s of [-1, 1]) {                                          // 물결 커튼
+    const g = new THREE.PlaneGeometry(1.0, 2.95, 40, 1);
+    const p = g.attributes.position;
+    for (let i = 0; i < p.count; i++) p.setZ(i, Math.sin(p.getX(i) * 18) * 0.06);
+    g.computeVertexNormals();
+    put(win, g, toon(0x9db7d2, { side: THREE.DoubleSide }), [s * 1.95, -0.05, 0.3], { outline: 0 });
+    put(win, new THREE.TorusGeometry(0.1, 0.03, 8, 24), 0x7f9dbb, [s * 1.95, -0.3, 0.32], { outline: 0 });
+  }
+  // 창턱 화분
+  put(win, new THREE.CylinderGeometry(0.2, 0.15, 0.3, 24), 0xd98c6a, [-0.9, -1.08, 0.22]);
+  for (const [dx, dy, rz] of [[0, 0.32, 0], [-0.12, 0.26, 0.6], [0.12, 0.27, -0.6]]) {
+    const leaf = put(win, new THREE.SphereGeometry(1, 20, 12), 0x7fae6e, [-0.9 + dx, -1.08 + dy, 0.22], { outline: 0.01, rot: [0, 0, rz] });
+    leaf.scale.set(0.09, 0.2, 0.06);
+  }
+
+  // 침대 (왼쪽 안쪽)
+  const bed = new THREE.Group();
+  bed.position.set(minX + 2.25, 0, minZ + 1.3);
+  room.add(bed);
+  const wood = 0xd9b48a;
+  put(bed, rbox(4.1, 0.5, 2.5, 0.08), wood, [0, 0.45, 0]);
+  for (const [x, z] of [[-1.95, -1.1], [1.95, -1.1], [-1.95, 1.1], [1.95, 1.1]]) put(bed, rbox(0.2, 0.3, 0.2, 0.05), wood, [x, 0.12, z]);
+  put(bed, rbox(0.25, 2.0, 2.5, 0.1), wood, [-2.0, 1.0, 0]);          // 머리판
+  put(bed, rbox(0.22, 1.2, 2.5, 0.1), wood, [2.0, 0.6, 0]);           // 발판
+  put(bed, rbox(3.75, 0.45, 2.3, 0.15), 0xfbf7f0, [0, 0.9, 0]);       // 매트리스
+  put(bed, rbox(2.6, 0.24, 2.42, 0.1), 0xf0c75e, [0.55, 1.2, 0]);    // 이불
+  put(bed, rbox(2.62, 0.05, 2.44, 0.02), 0xe7a96a, [0.55, 1.31, 0], { outline: 0 });
+  const pillow = put(bed, rbox(0.85, 0.32, 1.7, 0.15), 0xffffff, [-1.4, 1.25, 0]);
+  pillow.rotation.z = 0.12;
+  // 곰인형
+  const bear = new THREE.Group();
+  bear.position.set(-1.2, 1.35, 0.75);
+  bear.rotation.y = 0.6;
+  bed.add(bear);
+  const fur = 0xb98656;
+  put(bear, new THREE.SphereGeometry(0.28, 24, 16), fur, [0, 0.25, 0]);
+  put(bear, new THREE.SphereGeometry(0.22, 24, 16), fur, [0, 0.65, 0]);
+  for (const s of [-1, 1]) {
+    put(bear, new THREE.SphereGeometry(0.08, 16, 12), fur, [s * 0.16, 0.83, 0]);
+    put(bear, new THREE.SphereGeometry(0.09, 16, 12), fur, [s * 0.24, 0.3, 0.1]);
+    put(bear, new THREE.SphereGeometry(0.1, 16, 12), fur, [s * 0.14, 0.05, 0.18]);
+    put(bear, new THREE.SphereGeometry(0.025, 8, 8), 0x2a2a2a, [s * 0.08, 0.7, 0.2], { outline: 0 });
+  }
+  put(bear, new THREE.SphereGeometry(0.08, 16, 12), 0xe8cfae, [0, 0.6, 0.18], { outline: 0.008 });
+
+  // 삼각 깃발 가랜드 (침대 위)
+  const flagCols = [0xe9967a, 0xf0c75e, 0x9db7d2, 0xa9c4a0, 0xe7b8a4];
+  const gx0 = minX + 0.4, gx1 = minX + 4.4;
+  const sag = (t) => 4.75 - Math.sin(t * Math.PI) * 0.35;
+  const string = new THREE.CatmullRomCurve3(Array.from({ length: 9 }, (_, i) => v3(lerp(gx0, gx1, i / 8), sag(i / 8), minZ + 0.06)));
+  put(room, new THREE.TubeGeometry(string, 40, 0.012, 6), 0x7a6a5a, [0, 0, 0], { outline: 0 });
+  for (let i = 0; i < 9; i++) {
+    const t = (i + 0.5) / 9, x = lerp(gx0, gx1, t), y = sag(t);
+    const tri = new THREE.Shape();
+    tri.moveTo(-0.17, 0); tri.lineTo(0.17, 0); tri.lineTo(0, -0.4); tri.closePath();
+    const f = new THREE.Mesh(new THREE.ShapeGeometry(tri), toon(flagCols[i % 5], { side: THREE.DoubleSide }));
+    f.position.set(x, y, minZ + 0.05);
+    room.add(f);
+  }
+
+  // 책상 + 의자 (오른쪽 안쪽)
+  const desk = new THREE.Group();
+  desk.position.set(maxX - 4.5, 0, minZ + 0.75);
+  room.add(desk);
+  const mint = 0xa8d5c2, white = 0xf7f3ec;
+  put(desk, rbox(3.3, 0.14, 1.35, 0.05), 0xe0bf95, [0, 1.55, 0]);
+  put(desk, rbox(0.14, 1.5, 1.25, 0.04), white, [-1.5, 0.75, 0]);
+  put(desk, rbox(1.05, 1.48, 1.25, 0.05), white, [1.0, 0.74, 0]);
+  for (const y of [0.35, 0.82, 1.24]) {
+    put(desk, rbox(0.95, 0.38, 0.06, 0.03), mint, [1.0, y, 0.64]);
+    put(desk, rbox(0.25, 0.05, 0.06, 0.02), 0x8a8a8a, [1.0, y + 0.07, 0.69], { outline: 0 });
+  }
+  // 스탠드
+  put(desk, new THREE.CylinderGeometry(0.22, 0.25, 0.08, 24), 0xf0c75e, [-1.1, 1.66, -0.3]);
+  put(desk, new THREE.CylinderGeometry(0.03, 0.03, 0.9, 10), 0xf0c75e, [-1.1, 2.1, -0.3], { rot: [0, 0, 0.25] });
+  put(desk, new THREE.ConeGeometry(0.26, 0.32, 24, 1, true), toon(0xf0c75e, { side: THREE.DoubleSide }), [-0.93, 2.55, -0.25], { rot: [0, 0, -0.9] });
+  // 책 더미, 연필꽂이
+  [[0xe9967a, 0.12], [0x9db7d2, 0.1], [0xa9c4a0, 0.13]].forEach(([c, t], i) => {
+    put(desk, rbox(0.8, t, 0.6, 0.02), c, [-0.2, 1.68 + i * 0.13, -0.25], { outline: 0.01, rot: [0, i * 0.15 - 0.1, 0] });
+  });
+  put(desk, new THREE.CylinderGeometry(0.11, 0.11, 0.3, 20), 0x9db7d2, [0.75, 1.77, -0.35]);
+  [0xe9967a, 0xf0c75e, 0x7fae6e].forEach((c, i) =>
+    put(desk, new THREE.CylinderGeometry(0.02, 0.02, 0.5, 6), c, [0.7 + i * 0.05, 1.95, -0.35 + (i - 1) * 0.04], { outline: 0.006, rot: [0.1 * (i - 1), 0, 0.15 * (i - 1)] }));
+  // 공책 펼침
+  put(desk, rbox(0.9, 0.03, 0.6, 0.01), 0xffffff, [0.2, 1.635, 0.25], { outline: 0.008, rot: [0, 0.2, 0] });
+  // 의자
+  const chair = new THREE.Group();
+  chair.position.set(-0.2, 0, 1.15);
+  chair.rotation.y = 0.25;
+  desk.add(chair);
+  put(chair, rbox(1.1, 0.14, 1.0, 0.05), mint, [0, 0.95, 0]);
+  put(chair, rbox(1.1, 1.0, 0.12, 0.05), mint, [0, 1.55, 0.45]);
+  for (const [x, z] of [[-0.45, -0.4], [0.45, -0.4], [-0.45, 0.4], [0.45, 0.4]]) put(chair, rbox(0.1, 0.9, 0.1, 0.03), white, [x, 0.45, z]);
+
+  // 벽에 붙인 그림 두 장 (책상 위)
+  const drawing1 = canvasTex(512, 384, (g, w, hh) => {
+    g.fillStyle = '#fffdf7'; g.fillRect(0, 0, w, hh);
+    g.lineCap = 'round'; g.lineJoin = 'round'; g.lineWidth = 10;
+    g.fillStyle = '#a9c4a0'; g.fillRect(0, hh - 70, w, 70);
+    g.fillStyle = '#f0c75e'; g.beginPath(); g.arc(410, 85, 45, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = '#f0c75e';
+    for (let i = 0; i < 8; i++) { const a = (i / 8) * Math.PI * 2; g.beginPath(); g.moveTo(410 + Math.cos(a) * 62, 85 + Math.sin(a) * 62); g.lineTo(410 + Math.cos(a) * 85, 85 + Math.sin(a) * 85); g.stroke(); }
+    g.fillStyle = '#e9967a'; g.fillRect(110, 170, 160, 140);
+    g.fillStyle = '#c96f5c'; g.beginPath(); g.moveTo(90, 175); g.lineTo(190, 90); g.lineTo(290, 175); g.closePath(); g.fill();
+    g.fillStyle = '#9db7d2'; g.fillRect(140, 200, 45, 45); g.fillStyle = '#8a5a3c'; g.fillRect(205, 225, 40, 85);
+  });
+  const drawing2 = canvasTex(384, 512, (g, w, hh) => {
+    g.fillStyle = '#fffdf7'; g.fillRect(0, 0, w, hh);
+    const cols = ['#e9967a', '#f0c75e', '#a9c4a0', '#9db7d2', '#b9a3d0'];
+    g.lineWidth = 26;
+    cols.forEach((c, i) => { g.strokeStyle = c; g.beginPath(); g.arc(w / 2, 330, 150 - i * 26, Math.PI, 0); g.stroke(); });
+    g.fillStyle = '#262626'; g.beginPath(); g.ellipse(w / 2, 420, 50, 62, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#ffffff'; g.beginPath(); g.ellipse(w / 2, 415, 36, 30, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#262626';
+    for (const s of [-1, 1]) { g.beginPath(); g.arc(w / 2 + s * 14, 410, 7, 0, Math.PI * 2); g.fill(); }
+  });
+  const paper = (tex, w, hh, x, y, rz) => {
+    const p = new THREE.Mesh(new THREE.PlaneGeometry(w, hh), toon(0xffffff, { map: tex }));
+    p.position.set(x, y, minZ + 0.03); p.rotation.z = rz; p.receiveShadow = true;
+    room.add(p);
+    const tape = new THREE.Mesh(new THREE.PlaneGeometry(0.28, 0.1), toon(0xf4e3a1, { transparent: true, opacity: 0.85 }));
+    tape.position.set(x - Math.sin(rz) * hh / 2, y + Math.cos(rz) * hh / 2, minZ + 0.035); tape.rotation.z = rz + 0.2;
+    room.add(tape);
+  };
+  paper(drawing1, 1.3, 0.98, desk.position.x - 0.9, 3.55, 0.04);
+  paper(drawing2, 0.85, 1.13, desk.position.x + 0.9, 3.65, -0.06);
+
+  // 책장 (오른쪽 벽)
+  const shelf = new THREE.Group();
+  shelf.position.set(maxX - 0.5, 0, minZ + 4.6);
+  room.add(shelf);
+  const sw = 3.0, sh = 4.0, sd = 0.9;
+  put(shelf, rbox(sd, sh, 0.12, 0.03), white, [0, sh / 2, -sw / 2]);
+  put(shelf, rbox(sd, sh, 0.12, 0.03), white, [0, sh / 2, sw / 2]);
+  put(shelf, rbox(0.06, sh, sw, 0.02), 0xe9ddc9, [sd / 2 - 0.03, sh / 2, 0], { outline: 0 });
+  const levels = [0.08, 1.05, 2.02, 2.99, 3.94];
+  for (const y of levels) put(shelf, rbox(sd, 0.1, sw, 0.03), white, [0, y, 0]);
+  const bookCols = [0xe9967a, 0xf0c75e, 0x9db7d2, 0xa9c4a0, 0xb9a3d0, 0xe7b8a4, 0x7f9dbb, 0xd98c6a];
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 9301 + 49297) % 233280) / 233280);
+  for (let L = 0; L < 4; L++) {
+    let z = -sw / 2 + 0.12;
+    const base = levels[L] + 0.05;
+    const limit = sw / 2 - 0.12 - (L === 1 ? 0.9 : 0);
+    while (z < limit - 0.12) {
+      const t = 0.1 + rnd() * 0.1, hgt = 0.55 + rnd() * 0.3;
+      if (z + t > limit) break;
+      put(shelf, rbox(0.62, hgt, t, 0.015), bookCols[Math.floor(rnd() * bookCols.length)], [-0.05, base + hgt / 2, z + t / 2], { outline: 0.008 });
+      z += t + 0.01;
+    }
+  }
+  // 둘째 칸: 지구본
+  put(shelf, new THREE.CylinderGeometry(0.16, 0.2, 0.08, 20), 0xb8875a, [-0.05, levels[1] + 0.09, 0.95]);
+  put(shelf, new THREE.SphereGeometry(0.3, 32, 20), 0x8fc1d9, [-0.05, levels[1] + 0.45, 0.95]);
+  for (const [a, b] of [[0.3, 0.2], [-0.5, 1.4]]) {
+    const land = put(shelf, new THREE.SphereGeometry(0.31, 24, 16, a, 0.9, b, 0.7), 0x9cc58b, [-0.05, levels[1] + 0.45, 0.95], { outline: 0 });
+    land.rotation.y = -Math.PI / 2;
+  }
+
+  // 벽시계 (왼쪽 벽)
+  const clock = new THREE.Group();
+  clock.position.set(minX + 0.05, 4.0, 2.2);
+  clock.rotation.y = Math.PI / 2;
+  room.add(clock);
+  put(clock, new THREE.CylinderGeometry(0.5, 0.5, 0.08, 48).rotateX(Math.PI / 2), 0xe9967a, [0, 0, 0.04]);
+  put(clock, new THREE.CircleGeometry(0.42, 48), 0xffffff, [0, 0, 0.085], { outline: 0 });
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    put(clock, new THREE.CircleGeometry(i % 3 ? 0.018 : 0.03, 12), 0x333333, [Math.sin(a) * 0.34, Math.cos(a) * 0.34, 0.09], { outline: 0 });
+  }
+  const hand = (len, wdt, a) => {
+    const g = new THREE.PlaneGeometry(wdt, len).translate(0, len / 2, 0);
+    put(clock, g, 0x333333, [0, 0, 0.095], { outline: 0, rot: [0, 0, a] });
+  };
+  hand(0.22, 0.04, -Math.PI * 0.33);
+  hand(0.32, 0.025, Math.PI * 0.6);
+
+  // 장난감 상자 + 공 + 블록 (오른쪽 앞)
+  const toys = new THREE.Group();
+  toys.position.set(maxX - 2.2, 0, maxZ - 3.4);
+  toys.rotation.y = -0.4;
+  room.add(toys);
+  put(toys, rbox(1.6, 1.0, 1.1, 0.08), 0xf0c75e, [0, 0.5, 0]);
+  put(toys, rbox(1.7, 0.14, 1.2, 0.06), 0xe9967a, [0, 1.07, -0.25], { rot: [-0.5, 0, 0] });
+  put(toys, new THREE.SphereGeometry(0.3, 32, 20), 0xe9967a, [-1.3, 0.3, 0.6]);
+  const ring = put(toys, new THREE.TorusGeometry(0.3, 0.04, 8, 48), 0xffffff, [-1.3, 0.3, 0.6], { outline: 0, rot: [0.4, 0, 0] });
+  [[0x9db7d2, 0.9, 0.2, 0.9], [0xa9c4a0, 1.25, 0.2, 0.75], [0xb9a3d0, 1.08, 0.6, 0.82]].forEach(([c, x, y, z], i) =>
+    put(toys, rbox(0.36, 0.36, 0.36, 0.04), c, [x, y, z], { rot: [0, i * 0.5, 0] }));
+
+  // 큰 화분 (왼쪽 앞)
+  const plant = new THREE.Group();
+  plant.position.set(minX + 0.9, 0, maxZ - 2.5);
+  room.add(plant);
+  put(plant, new THREE.CylinderGeometry(0.45, 0.35, 0.8, 32), 0xf7f3ec, [0, 0.4, 0]);
+  put(plant, new THREE.CylinderGeometry(0.42, 0.42, 0.04, 32), 0x7a5a40, [0, 0.78, 0], { outline: 0 });
+  for (let i = 0; i < 9; i++) {
+    const a = (i / 9) * Math.PI * 2, tilt = 0.35 + (i % 3) * 0.2, len = 0.9 + (i % 2) * 0.35;
+    const stem = new THREE.Group();
+    stem.position.set(0, 0.8, 0);
+    stem.rotation.set(Math.cos(a) * tilt, 0, Math.sin(a) * tilt);
+    plant.add(stem);
+    const leaf = put(stem, new THREE.SphereGeometry(1, 20, 12), i % 2 ? 0x7fae6e : 0x6a9c5d, [0, len * 0.6, 0], { outline: 0.012 });
+    leaf.scale.set(0.2, len * 0.5, 0.07);
+    leaf.rotation.y = a;
+  }
+
+  // 천장 조명
+  put(room, new THREE.CylinderGeometry(0.015, 0.015, 0.5, 6), 0x555555, [0, h - 0.25, cz], { outline: 0 });
+  put(room, new THREE.SphereGeometry(0.6, 40, 20, 0, Math.PI * 2, 0, Math.PI / 2), toon(0xf7f3ec, { side: THREE.DoubleSide }), [0, h - 0.75, cz]);
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.16, 20, 12), new THREE.MeshBasicMaterial({ color: 0xfff3c4 }));
+  bulb.position.set(0, h - 0.7, cz);
+  room.add(bulb);
+  const lampLight = new THREE.PointLight(0xffe2b0, 8, 20, 1.5);
+  lampLight.position.set(0, h - 0.9, cz);
+  room.add(lampLight);
+
+  // 방문 (오른쪽 벽)
+  const door = new THREE.Group();
+  door.position.set(maxX - 0.02, 0, 3.5);
+  door.rotation.y = -Math.PI / 2;
+  room.add(door);
+  const doorW = 1.9, doorH = 3.6;
+  put(door, rbox(0.18, doorH + 0.2, 0.14, 0.04), 0xffffff, [-doorW / 2 - 0.09, (doorH + 0.2) / 2, 0.07]);
+  put(door, rbox(0.18, doorH + 0.2, 0.14, 0.04), 0xffffff, [doorW / 2 + 0.09, (doorH + 0.2) / 2, 0.07]);
+  put(door, rbox(doorW + 0.36, 0.2, 0.14, 0.04), 0xffffff, [0, doorH + 0.1, 0.07]);
+  const doorWood = 0xd8a878;
+  put(door, rbox(doorW, doorH, 0.1, 0.03), doorWood, [0, doorH / 2, 0.05]);
+  for (const [y, hh] of [[2.55, 1.3], [0.95, 1.3]]) {
+    put(door, rbox(1.35, hh, 0.04, 0.03), 0xcf9c6c, [0, y, 0.11], { outline: 0.008 });
+  }
+  put(door, new THREE.SphereGeometry(0.09, 20, 14), 0xe8c15a, [0.7, 1.65, 0.2]);
+  put(door, new THREE.CylinderGeometry(0.1, 0.1, 0.04, 20).rotateX(Math.PI / 2), 0xe8c15a, [0.7, 1.65, 0.11], { outline: 0.006 });
+  // 문패
+  const signTex = canvasTex(512, 256, (g, w, hh) => {
+    g.fillStyle = '#fbf3e4'; g.fillRect(0, 0, w, hh);
+    g.fillStyle = '#5b4636'; g.font = '400 92px Pretendard, sans-serif';
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText('내 방', w / 2, hh / 2 + 4);
+    g.fillStyle = '#e9967a';
+    for (const x of [70, w - 70]) { g.beginPath(); g.arc(x, hh / 2, 16, 0, Math.PI * 2); g.fill(); }
+  });
+  put(door, rbox(0.9, 0.45, 0.04, 0.02), toon(0xffffff, { map: signTex }), [0, 3.05, 0.15], { outline: 0.008 });
+  put(door, new THREE.TorusGeometry(0.22, 0.012, 6, 24, Math.PI), 0x7a6a5a, [0, 3.27, 0.14], { outline: 0 });
+
+  // 책가방 (문 옆 바닥)
+  const bag = new THREE.Group();
+  bag.position.set(maxX - 0.55, 0, 6.0);
+  bag.rotation.set(0, -Math.PI / 2 + 0.3, 0);
+  room.add(bag);
+  const bagLean = new THREE.Group();
+  bagLean.rotation.x = -0.18;
+  bag.add(bagLean);
+  put(bagLean, rbox(0.85, 1.05, 0.45, 0.15), 0xf0c75e, [0, 0.53, 0]);
+  put(bagLean, rbox(0.62, 0.45, 0.16, 0.08), 0xe9967a, [0, 0.35, 0.27]);
+  put(bagLean, rbox(0.87, 0.42, 0.5, 0.12), 0xe2b44c, [0, 0.9, 0.03]);
+  put(bagLean, new THREE.TorusGeometry(0.16, 0.035, 8, 20, Math.PI), 0x7a6a5a, [0, 1.06, -0.05], { outline: 0 });
+
+  // 빈백 소파 (책장 앞)
+  const bean = put(room, new THREE.SphereGeometry(1, 40, 24), 0x9db7d2, [maxX - 2.6, 0.5, minZ + 8.2]);
+  bean.scale.set(1.05, 0.55, 1.0);
+  const beanBack = put(room, new THREE.SphereGeometry(1, 40, 24), 0x9db7d2, [maxX - 2.1, 0.95, minZ + 8.2]);
+  beanBack.scale.set(0.5, 0.7, 0.9);
+
+  // 옷장 (왼쪽 벽)
+  const ward = new THREE.Group();
+  ward.position.set(minX + 0.65, 0, -3.3);
+  ward.rotation.y = Math.PI / 2;
+  room.add(ward);
+  put(ward, rbox(2.6, 4.3, 1.2, 0.08), 0xf7f3ec, [0, 2.3, 0]);
+  for (const s of [-1, 1]) {
+    put(ward, rbox(1.22, 3.9, 0.06, 0.04), 0xe7b8a4, [s * 0.63, 2.35, 0.62]);
+    put(ward, rbox(0.06, 0.5, 0.06, 0.03), 0xe8c15a, [s * 0.12, 2.4, 0.68], { outline: 0.006 });
+    put(ward, rbox(0.15, 0.18, 0.15, 0.03), 0xb8875a, [s * 1.1, 0.09, 0.4]);
+    put(ward, rbox(0.15, 0.18, 0.15, 0.03), 0xb8875a, [s * 1.1, 0.09, -0.4]);
+  }
+  put(ward, rbox(1.0, 0.6, 0.8, 0.08), 0xd8b98f, [-0.5, 4.75, 0]);      // 옷장 위 바구니
+  put(ward, rbox(0.7, 0.45, 0.7, 0.06), 0xa9c4a0, [0.6, 4.68, 0.05]);   // 상자
+
+  // 서랍장 + 어항 + 사진 액자 (왼쪽 벽, 시계 아래)
+  const chest = new THREE.Group();
+  chest.position.set(minX + 0.55, 0, 2.2);
+  chest.rotation.y = Math.PI / 2;
+  room.add(chest);
+  put(chest, rbox(2.2, 1.55, 1.0, 0.06), 0xf7f3ec, [0, 0.85, 0]);
+  for (let i = 0; i < 3; i++) {
+    const y = 0.4 + i * 0.46;
+    put(chest, rbox(2.0, 0.4, 0.06, 0.03), 0xa8d5c2, [0, y, 0.5]);
+    put(chest, new THREE.SphereGeometry(0.06, 12, 8), 0xe8c15a, [0, y, 0.56], { outline: 0.006 });
+  }
+  for (const s of [-1, 1]) put(chest, rbox(0.12, 0.1, 0.12, 0.02), 0xb8875a, [s * 0.95, 0.05, 0.35]);
+  // 어항
+  put(chest, new THREE.CylinderGeometry(0.3, 0.3, 0.04, 24), 0xd8b98f, [-0.5, 1.65, 0]);
+  const water = new THREE.Mesh(new THREE.SphereGeometry(0.34, 32, 20, 0, Math.PI * 2, Math.PI * 0.35, Math.PI * 0.65), toon(0x9fd0e6, { transparent: true, opacity: 0.55 }));
+  water.position.set(-0.5, 1.98, 0);
+  chest.add(water);
+  const glass = new THREE.Mesh(new THREE.SphereGeometry(0.38, 32, 20), toon(0xe6f4fa, { transparent: true, opacity: 0.25, depthWrite: false }));
+  glass.position.set(-0.5, 2.0, 0);
+  chest.add(glass);
+  const fish = put(chest, new THREE.SphereGeometry(1, 16, 10), 0xf09a5a, [-0.5, 1.9, 0.05], { outline: 0.005 });
+  fish.scale.set(0.09, 0.06, 0.04);
+  const tail = put(chest, new THREE.ConeGeometry(0.05, 0.08, 10), 0xf09a5a, [-0.62, 1.9, 0.05], { outline: 0.004, rot: [0, 0, Math.PI / 2] });
+  // 사진 액자
+  const photoTex = canvasTex(256, 320, (g, w, hh) => {
+    g.fillStyle = '#cfe6f2'; g.fillRect(0, 0, w, hh);
+    g.fillStyle = '#a9c4a0'; g.fillRect(0, hh * 0.7, w, hh * 0.3);
+    g.fillStyle = '#262626'; g.beginPath(); g.ellipse(w / 2, hh * 0.55, 50, 66, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#ffffff'; g.beginPath(); g.ellipse(w / 2, hh * 0.5, 36, 32, 0, 0, Math.PI * 2); g.fill();
+    g.fillStyle = '#262626';
+    for (const s of [-1, 1]) { g.beginPath(); g.arc(w / 2 + s * 14, hh * 0.49, 6, 0, Math.PI * 2); g.fill(); }
+  });
+  const frame = new THREE.Group();
+  frame.position.set(0.55, 1.62, -0.1);
+  frame.rotation.set(-0.15, -0.3, 0);
+  chest.add(frame);
+  put(frame, rbox(0.55, 0.68, 0.05, 0.02), 0xe9967a, [0, 0.34, 0]);
+  put(frame, new THREE.PlaneGeometry(0.42, 0.54), toon(0xffffff, { map: photoTex }), [0, 0.34, 0.03], { outline: 0 });
+
+  // 코르크 게시판 (뒤쪽 벽, 침대와 창문 사이)
+  const cork = new THREE.Group();
+  cork.position.set(minX + 6.6, 3.3, minZ + 0.02);
+  room.add(cork);
+  put(cork, rbox(2.4, 1.6, 0.08, 0.03), 0xc9a27a, [0, 0, 0.04]);
+  for (const [x, y, w, d] of [[-1.2, 0, 0.1, 1.7], [1.2, 0, 0.1, 1.7], [0, 0.8, 2.5, 0.1], [0, -0.8, 2.5, 0.1]]) {
+    put(cork, rbox(w, d, 0.12, 0.03), 0xffffff, [x, y, 0.06], { outline: 0.01 });
+  }
+  [[-0.65, 0.3, 0xf4e3a1, 0.08], [0.05, 0.25, 0xf3c1c6, -0.1], [0.7, 0.35, 0xbfe0f2, 0.05], [-0.35, -0.35, 0xc8e3c0, -0.05], [0.45, -0.3, 0xffffff, 0.1]]
+    .forEach(([x, y, c, rz], i) => {
+      put(cork, new THREE.PlaneGeometry(i === 4 ? 0.65 : 0.5, 0.5), toon(c), [x, y, 0.1], { outline: 0, rot: [0, 0, rz] });
+      put(cork, new THREE.SphereGeometry(0.04, 12, 8), [0xe9967a, 0x7f9dbb, 0xf0c75e][i % 3], [x, y + 0.2, 0.13], { outline: 0.005 });
+    });
+
+  // 방석 두 개 (러그 옆)
+  for (const [x, z, c] of [[-6.6, 4.2, 0xf0c75e], [-5.4, 6.0, 0xe7b8a4]]) {
+    const cush = put(room, new THREE.SphereGeometry(1, 32, 16), c, [x, 0.16, z]);
+    cush.scale.set(0.7, 0.17, 0.7);
+  }
+
+  return room;
+}
+
+/* ---------- 배치 ---------- */
+scene.add(buildRoom());
+
+// 모기 크기: 펭귄 눈만 한 머리 (외곽선 두께도 같이 줄임)
+const MOSQUITO_SCALE = 1 / 6;
+outlineScale = MOSQUITO_SCALE;
+const mosquito = buildMosquito();
+outlineScale = 1;
+mosquito.scale.setScalar(MOSQUITO_SCALE);
+mosquito.position.set(-1.8, 1.75, 0);
+mosquito.rotation.y = 2.3;
+scene.add(mosquito);
+
+const penguin = buildPenguin();
+penguin.position.set(1.5, 0.02, 0);
+penguin.scale.setScalar(1.2);
+penguin.rotation.y = -0.3;
+scene.add(penguin);
+
+/* ---------- 시점 전환 ---------- */
+const views = {
+  both:     { target: v3(0, 2, -1), cam: v3(0, 6.5, 21) },
+  mosquito: { target: v3(-1.8, 1.75, 0), cam: v3(-1.3, 2.0, 1.8) },
+  penguin:  { target: v3(1.45, 1.4, 0), cam: v3(1.45, 1.9, 7.9) },
+};
+let goal = null;
+document.querySelectorAll('nav button').forEach((b) => {
+  b.addEventListener('click', () => {
+    document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('on', x === b));
+    goal = views[b.dataset.view];
+  });
+});
+controls.addEventListener('start', () => { goal = null; });
+
+const params = new URLSearchParams(location.search);
+if (views[params.get('view')]) {
+  const v = views[params.get('view')];
+  camera.position.copy(v.cam); controls.target.copy(v.target);
+  document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('on', x.dataset.view === params.get('view')));
+}
+if (params.get('cam')) {
+  camera.position.fromArray(params.get('cam').split(',').map(Number));
+  controls.target.fromArray((params.get('look') || '0,1.5,0').split(',').map(Number));
+}
+const frozen = params.has('t') ? parseFloat(params.get('t')) : null;
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+const clock = new THREE.Clock();
+renderer.setAnimationLoop(() => {
+  const t = frozen ?? clock.getElapsedTime();
+  mosquito.userData.update(t);
+  penguin.userData.update(t);
+  if (goal) {
+    camera.position.lerp(goal.cam, 0.08);
+    controls.target.lerp(goal.target, 0.08);
+    if (camera.position.distanceTo(goal.cam) < 0.01) goal = null;
+  }
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>
