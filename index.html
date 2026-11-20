@@ -81,23 +81,45 @@
     border-radius: 50%; background: rgba(251, 247, 240, 0.95); border: 1px solid var(--line);
     pointer-events: none;
   }
-  #run {
-    position: fixed; right: 28px; bottom: 44px; width: 108px; height: 108px;
-    border-radius: 50%; font: inherit; font-size: 16px; font-weight: 400; color: var(--ink);
-    background: rgba(251, 247, 240, 0.88); border: 1px solid var(--line); touch-action: none;
-  }
-  #run.on, #flyBtns button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
-  #flyBtns { position: fixed; right: 28px; bottom: 28px; display: flex; flex-direction: column; gap: 14px; }
-  #flyBtns button {
-    width: 92px; height: 92px; border-radius: 50%;
+  .btn {
+    position: fixed; border-radius: 50%;
     font: inherit; font-size: 16px; font-weight: 400; color: var(--ink);
     background: rgba(251, 247, 240, 0.88); border: 1px solid var(--line); touch-action: none;
   }
+  .btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.main { right: 28px; bottom: 40px; width: 116px; height: 116px; font-size: 19px; }
+  .btn.wait { color: var(--muted); background: rgba(251, 247, 240, 0.6); }
+  #run { right: 160px; bottom: 28px; width: 84px; height: 84px; }
+  #up { right: 160px; bottom: 120px; width: 78px; height: 78px; }
+  #down { right: 160px; bottom: 28px; width: 78px; height: 78px; }
+
+  #score {
+    position: fixed; top: 16px; right: 16px;
+    font-size: 15px; background: rgba(251, 247, 240, 0.9);
+    border: 1px solid var(--line); border-radius: 4px; padding: 8px 14px;
+  }
+  #score b { font-weight: 400; }
+  #status {
+    position: fixed; left: 50%; top: 84px; transform: translateX(-50%);
+    font-size: 17px; font-weight: 400; text-align: center; pointer-events: none;
+    background: rgba(251, 247, 240, 0.94); border: 1px solid var(--line); border-radius: 6px; padding: 10px 18px;
+  }
+  #status:empty { display: none; }
+  #labels { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  .lbl { position: absolute; left: 0; top: 0; white-space: nowrap; transition: opacity 0.3s; }
+  .lbl.bubble {
+    background: #fff; border: 1px solid var(--ink); border-radius: 12px;
+    padding: 7px 14px; font-size: 17px; font-weight: 400;
+  }
+  .lbl.pop { font-size: 34px; font-weight: 400; color: var(--ink); -webkit-text-stroke: 0; text-shadow: 0 0 6px #fff, 0 0 2px #fff; }
+  .lbl.plus { font-size: 26px; font-weight: 400; color: #d9534f; text-shadow: 0 0 4px #fff; }
+  .lbl.tag { font-size: 15px; font-weight: 400; background: rgba(251, 247, 240, 0.94); border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px; }
   @media (max-width: 600px) {
     #stick { left: 16px; bottom: 16px; width: 128px; height: 128px; }
-    #run { right: 16px; bottom: 28px; width: 92px; height: 92px; }
-    #flyBtns { right: 16px; bottom: 16px; gap: 10px; }
-    #flyBtns button { width: 78px; height: 78px; }
+    .btn.main { right: 16px; bottom: 24px; width: 96px; height: 96px; }
+    #run, #down { right: 124px; bottom: 16px; width: 70px; height: 70px; }
+    #up { right: 124px; bottom: 96px; width: 70px; height: 70px; }
+    #status { top: 120px; max-width: calc(100% - 32px); }
     #hint { top: 64px; max-width: calc(100% - 32px); }
   }
 </style>
@@ -132,10 +154,20 @@
 
 <section id="hud" class="hidden">
   <button id="back">처음으로</button>
+  <div id="labels"></div>
   <div id="hint"></div>
+  <div id="score"></div>
+  <div id="status"></div>
   <div id="stick"><div id="knob"></div></div>
-  <button id="run">달리기</button>
-  <div id="flyBtns"><button id="up">위로</button><button id="down">아래로</button></div>
+  <div class="pengBtns">
+    <button class="btn main" id="clap">손뼉</button>
+    <button class="btn" id="run">달리기</button>
+  </div>
+  <div class="mosqBtns">
+    <button class="btn main" id="bite">물기</button>
+    <button class="btn" id="up">위로</button>
+    <button class="btn" id="down">아래로</button>
+  </div>
 </section>
 
 <script type="module">
@@ -799,8 +831,12 @@ function buildPenguin() {
 
   const q = new THREE.Quaternion();
   let nextBlink = 2.2;
+  root.userData.body = body;
+  root.userData.hitMeshes = [white, black];
+  const q2 = new THREE.Quaternion();
   // walk: 0 = 가만히, 1 = 걷기, 그 이상 = 뛰기 / phase: 걸음 박자
-  root.userData.update = (t, walk = 0, phase = 0) => {
+  // fx.clap: 손뼉 진행(0~1) / fx.itch: 가려워서 몸 긁기(0~1)
+  root.userData.update = (t, walk = 0, phase = 0, fx = {}) => {
     const w = Math.min(walk, 1);
     body.position.y = LEG + lerp(Math.abs(Math.sin(t * 2.4)) * 0.03, Math.abs(Math.sin(phase)) * (0.08 + 0.05 * walk), w);
     for (const l of legs) {                                                       // 양발 번갈아 내딛기
@@ -813,6 +849,15 @@ function buildPenguin() {
     rPivot.quaternion.copy(q.setFromAxisAngle(FR.W, lerp(Math.sin(t * 2.4) * 0.05, Math.sin(phase) * 0.3, w)));
     if (t > nextBlink + 0.14) nextBlink = t + 2.5 + Math.random() * 2.5;
     faceMat.map = t > nextBlink ? faceShut : faceOpen;
+    const c = fx.clap ? Math.sin(fx.clap * Math.PI) : 0;          // 양 날개를 번쩍 들어 짝!
+    wave.value -= 0.75 * c;
+    rPivot.quaternion.multiply(q2.setFromAxisAngle(FR.W, 1.1 * c));
+    body.scale.set(1 + 0.05 * c, 1 - 0.07 * c, 1 + 0.05 * c);
+    if (fx.itch) {                                                // 아야! 간지러워!
+      body.rotation.z += Math.sin(t * 38) * 0.05 * fx.itch;
+      wave.value += Math.sin(t * 30) * 0.15 * fx.itch;
+    }
+    if (c > 0.6 || fx.itch) faceMat.map = faceShut;
   };
   return root;
 }
@@ -1295,14 +1340,27 @@ const penguin = buildPenguin();
 penguin.scale.setScalar(1.2);
 scene.add(penguin);
 
+/* ---------- 게임 규칙 숫자 (나중에 선생님 설정으로 바꿀 부분) ---------- */
+const RULE = {
+  respawn: 5,        // 잡힌 모기가 다시 날기까지 (초)
+  biteWait: 5,       // 문 모기가 다시 물 수 있기까지 (초)
+  slowTime: 2,       // 물린 펭귄이 느려지는 시간 (초)
+  slowK: 0.45,       // 느려질 때 속도 비율
+  clapWait: 0.7,     // 손뼉 다시 치기까지 (초)
+  smokeTime: 8,      // 모기향 효과 시간 (초)
+  smokeRange: 4,     // 모기향 연기 범위
+  smokeK: 0.4,       // 연기 속 모기 속도 비율
+  coilEvery: 18,     // 모기향이 새로 나타나는 간격 (초)
+};
+
 /* ---------- 화면 전환 ---------- */
 const $ = (s) => document.querySelector(s);
 let mode = 'title';            // title | play
 let role = 'penguin';          // 내가 조종하는 캐릭터
 let hintTimer = 0;
 const HINTS = {
-  penguin: '왼쪽 동그라미를 끌면 걸어요 · 달리기를 누르고 있으면 뛰어요<br>빈 화면을 밀면 둘러볼 수 있어요 (키보드: 방향키, Shift)',
-  mosquito: '왼쪽 동그라미로 날아다녀요 · 위로/아래로를 누르고 있으면 높이가 바뀌어요<br>빈 화면을 밀면 둘러볼 수 있어요 (키보드: 방향키, 스페이스 위로, Shift 아래로)',
+  penguin: '왼쪽 동그라미로 걸어요 · 달리기를 누르고 있으면 뛰어요 · 모기가 앞에 오면 손뼉!<br>빈 화면을 밀면 둘러볼 수 있어요 (키보드: 방향키, Shift 달리기, 스페이스 손뼉)',
+  mosquito: '동그라미를 위로 밀면 앞으로, 옆으로 밀면 방향을 돌려요 · 위로/아래로로 높이를 바꿔요 · 펭귄 가까이에서 물기!<br>빈 화면을 밀면 잠깐 둘러볼 수 있어요 (키보드: 방향키, 스페이스 위로, Shift 아래로, F 물기)',
 };
 function setMode(m) {
   mode = m;
@@ -1311,12 +1369,12 @@ function setMode(m) {
   $('#intro').classList.remove('hidden');
   $('#pick').classList.add('hidden');
   if (m === 'play') {
-    $('#run').classList.toggle('hidden', role !== 'penguin');
-    $('#flyBtns').classList.toggle('hidden', role !== 'mosquito');
+    document.querySelector('.pengBtns').classList.toggle('hidden', role !== 'penguin');
+    document.querySelector('.mosqBtns').classList.toggle('hidden', role !== 'mosquito');
     $('#hint').innerHTML = HINTS[role];
     $('#hint').style.opacity = 1;
     clearTimeout(hintTimer);
-    hintTimer = setTimeout(() => { $('#hint').style.opacity = 0; }, 7000);
+    hintTimer = setTimeout(() => { $('#hint').style.opacity = 0; }, 8000);
   }
 }
 $('#enter').addEventListener('click', () => {
@@ -1329,7 +1387,7 @@ $('#back').addEventListener('click', () => setMode('title'));
 
 function startAs(r) {
   role = r;
-  // 지금 카메라가 있는 쪽에서 내 캐릭터 뒤로 자연스럽게 이어지게
+  resetRound();
   const me = r === 'penguin' ? { x: P.x, z: P.z } : { x: M.pos.x, z: M.pos.z };
   view.yaw = Math.atan2(camera.position.x - me.x, camera.position.z - me.z);
   if (r === 'penguin') P.heading = view.yaw + Math.PI;
@@ -1341,7 +1399,11 @@ function startAs(r) {
 const keys = new Set();
 addEventListener('keydown', (e) => {
   keys.add(e.code);
-  if (e.code === 'Space' && mode === 'play') e.preventDefault();
+  if (mode !== 'play') return;
+  if (e.code === 'Space') e.preventDefault();
+  if (e.repeat) return;
+  if (role === 'penguin' && (e.code === 'Space' || e.code === 'KeyJ')) clap();
+  if (role === 'mosquito' && (e.code === 'KeyF' || e.code === 'KeyJ')) tryBite();
 });
 addEventListener('keyup', (e) => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
@@ -1378,8 +1440,11 @@ function holdButton(el, name) {
 holdButton($('#run'), 'run');
 holdButton($('#up'), 'up');
 holdButton($('#down'), 'down');
+// 한 번 누르면 바로 실행되는 버튼
+$('#clap').addEventListener('pointerdown', () => clap());
+$('#bite').addEventListener('pointerdown', () => tryBite());
 
-const view = { yaw: 0, pitch: 0.32 };
+const view = { yaw: 0, pitch: 0.32, lookYaw: 0, lookPitch: 0 };
 let lookId = null, lastX = 0, lastY = 0;
 const cvs = renderer.domElement;
 cvs.addEventListener('pointerdown', (e) => {
@@ -1389,8 +1454,13 @@ cvs.addEventListener('pointerdown', (e) => {
 });
 cvs.addEventListener('pointermove', (e) => {
   if (e.pointerId !== lookId) return;
-  view.yaw -= (e.clientX - lastX) * 0.006;
-  view.pitch = clamp(view.pitch + (e.clientY - lastY) * 0.004, -0.3, 0.95);
+  if (role === 'mosquito') {
+    view.lookYaw -= (e.clientX - lastX) * 0.006;
+    view.lookPitch = clamp(view.lookPitch + (e.clientY - lastY) * 0.004, -0.5, 0.8);
+  } else {
+    view.yaw -= (e.clientX - lastX) * 0.006;
+    view.pitch = clamp(view.pitch + (e.clientY - lastY) * 0.004, -0.3, 0.95);
+  }
   lastX = e.clientX; lastY = e.clientY;
 });
 const endLook = (e) => { if (e.pointerId === lookId) lookId = null; };
@@ -1398,6 +1468,18 @@ cvs.addEventListener('pointerup', endLook);
 cvs.addEventListener('pointercancel', endLook);
 
 // 조이스틱/방향키 → 카메라 기준 방향을 방 안의 방향으로
+function rawInput() {
+  let x = stickV.x, y = stickV.y;
+  if (keys.has('ArrowLeft') || keys.has('KeyA')) x -= 1;
+  if (keys.has('ArrowRight') || keys.has('KeyD')) x += 1;
+  if (keys.has('ArrowUp') || keys.has('KeyW')) y += 1;
+  if (keys.has('ArrowDown') || keys.has('KeyS')) y -= 1;
+  return {
+    x: clamp(x, -1, 1), y: clamp(y, -1, 1),
+    up: held.up || keys.has('Space') || keys.has('KeyE'),
+    down: held.down || keys.has('ShiftLeft') || keys.has('ShiftRight') || keys.has('KeyQ'),
+  };
+}
 function readInput() {
   let x = stickV.x, y = stickV.y;
   if (keys.has('ArrowLeft') || keys.has('KeyA')) x -= 1;
@@ -1417,9 +1499,42 @@ function readInput() {
 }
 const NO_INPUT = { x: 0, z: 0, amount: 0, run: false, up: false, down: false };
 
-/* ---------- 펭귄 움직임 ---------- */
+/* ---------- 화면 위 글자 (말풍선, 짝!, +1) ---------- */
+const labels = [];
+function say(text, cls, at, dur = 1.6) {
+  const el = document.createElement('div');
+  el.className = 'lbl ' + cls;
+  el.textContent = text;
+  $('#labels').appendChild(el);
+  labels.push({ el, at: typeof at === 'function' ? at : () => at, end: t + dur, rise: cls === 'plus' || cls === 'pop' });
+}
+const tmpV = new THREE.Vector3();
+function updateLabels() {
+  for (let i = labels.length - 1; i >= 0; i--) {
+    const L = labels[i];
+    const left = L.end - t;
+    if (left <= 0 || mode !== 'play') { L.el.remove(); labels.splice(i, 1); continue; }
+    tmpV.copy(L.at());
+    if (L.rise) tmpV.y += (1 - left) * 0.4;
+    tmpV.project(camera);
+    const hidden = tmpV.z > 1;
+    const x = (tmpV.x + 1) / 2 * innerWidth, y = (1 - tmpV.y) / 2 * innerHeight;
+    L.el.style.transform = `translate(${x}px, ${y}px) translate(-50%, -100%)`;
+    L.el.style.opacity = hidden ? 0 : Math.min(1, left * 3);
+  }
+}
+
+/* ---------- 점수 ---------- */
+const G = { bites: 0, catches: 0 };
+
+/* ---------- 펭귄 ---------- */
 const WALK = 3.2, RUN = 6.5;
-const P = { x: 0, z: 1.5, heading: 0, speed: 0, phase: 0, r: 0.95 };
+const P = {
+  x: 0, z: 1.5, heading: 0, speed: 0, phase: 0, r: 0.95,
+  clapAt: -9, slowUntil: 0, itchUntil: 0, smokeUntil: 0, aiClapAt: 0, alertUntil: 0,
+};
+const pFwd = () => v3(Math.sin(P.heading), 0, Math.cos(P.heading));
+const clapPoint = () => v3(P.x, 1.95, P.z).addScaledVector(pFwd(), 1.25);
 
 function pushOutOfBoxes(o) {
   const { minX, maxX, minZ, maxZ } = ROOM;
@@ -1440,33 +1555,66 @@ function pushOutOfBoxes(o) {
   }
 }
 
-// 내가 모기일 때 펭귄은 혼자 방을 돌아다님
-const wander = { tx: 0, tz: 0, wait: 0, stuck: 0 };
-function pickSpot() {
+function openSpot(margin = 2, gap = 1.2) {
   const { minX, maxX, minZ, maxZ } = ROOM;
-  for (let i = 0; i < 30; i++) {
-    const x = lerp(minX + 2, maxX - 2, Math.random()), z = lerp(minZ + 2, maxZ - 2, Math.random());
-    if (!solids.some((s) => x > s.x0 - 1.2 && x < s.x1 + 1.2 && z > s.z0 - 1.2 && z < s.z1 + 1.2)) { wander.tx = x; wander.tz = z; return; }
+  for (let i = 0; i < 40; i++) {
+    const x = lerp(minX + margin, maxX - margin, Math.random()), z = lerp(minZ + margin, maxZ - margin, Math.random());
+    if (!solids.some((s) => x > s.x0 - gap && x < s.x1 + gap && z > s.z0 - gap && z < s.z1 + gap)) return { x, z };
   }
+  return { x: 0, z: 1.5 };
 }
-pickSpot();
+
+// 손뼉: 펭귄 바로 앞에 있는 모기만 잡힘
+function clap() {
+  if (t < P.clapAt + RULE.clapWait) return;
+  P.clapAt = t;
+  const cp = clapPoint();
+  say('짝!', 'pop', cp, 0.7);
+  if (!M.alive) return;
+  if (inClapZone()) catchMosquito(cp);
+}
+function inClapZone() {
+  const d = M.pos.clone().sub(clapPoint());
+  d.y /= 1.15;
+  return d.length() < 0.9;
+}
+
+// 컴퓨터 펭귄 (내가 모기일 때): 돌아다니다가, 앞에 보이는 모기만 알아채고 손뼉
+// 등 뒤로 몰래 오는 모기는 모름. 물리면 그때 2.5초 동안 뒤돌아봄
+const wander = { tx: 0, tz: 0, wait: 0, stuck: 0 };
+function pickWander() { const s = openSpot(); wander.tx = s.x; wander.tz = s.z; }
+pickWander();
 function penguinBrain(dt) {
+  const mdx = M.pos.x - P.x, mdz = M.pos.z - P.z, md = Math.hypot(mdx, mdz);
+  const f = pFwd();
+  const facing = md > 1e-4 ? (f.x * mdx + f.z * mdz) / md : 1;   // 1 = 정면, -1 = 등 뒤
+  const sees = M.alive && md < 3.5 && M.pos.y < 3.4 && (facing > 0.42 || t < P.alertUntil);
+  if (sees) {
+    // 모기 쪽으로 천천히 돌고, 손 닿는 곳에 오면 한 박자 늦게 짝! (그 사이 피할 수 있음)
+    if (inClapZone() && !P.aiClapAt) P.aiClapAt = t + 0.45 + Math.random() * 0.5;
+    if (P.aiClapAt && t >= P.aiClapAt) { clap(); P.aiClapAt = 0; }
+    return { ...NO_INPUT, x: mdx / md, z: mdz / md, amount: md > 2.4 ? 0.6 : 0 };
+  }
+  if (P.aiClapAt && t >= P.aiClapAt) { clap(); P.aiClapAt = 0; }
+  P.aiClapAt = 0;
   if (wander.wait > 0) { wander.wait -= dt; return NO_INPUT; }
   const dx = wander.tx - P.x, dz = wander.tz - P.z, d = Math.hypot(dx, dz);
   wander.stuck = P.speed < 0.3 ? wander.stuck + dt : 0;
-  if (d < 0.6 || wander.stuck > 1.5) { pickSpot(); wander.wait = 1 + Math.random() * 2.5; wander.stuck = 0; return NO_INPUT; }
+  if (d < 0.6 || wander.stuck > 1.5) { pickWander(); wander.wait = 1 + Math.random() * 2.5; wander.stuck = 0; return NO_INPUT; }
   return { ...NO_INPUT, x: dx / d, z: dz / d, amount: 1 };
 }
 
 function updatePenguin(dt) {
   const inp = mode !== 'play' ? NO_INPUT : role === 'penguin' ? readInput() : penguinBrain(dt);
   const ml = Math.hypot(inp.x, inp.z);
-  const target = ml > 0.05 ? inp.amount * (inp.run ? RUN : WALK) : 0;
+  const slow = t < P.slowUntil ? RULE.slowK : 1;
+  const target = ml > 0.05 ? inp.amount * (inp.run ? RUN : WALK) * slow : 0;
   P.speed += (target - P.speed) * Math.min(1, dt * 8);
   if (ml > 0.05) {
     const want = Math.atan2(inp.x, inp.z);
     const diff = Math.atan2(Math.sin(want - P.heading), Math.cos(want - P.heading));
-    P.heading += diff * Math.min(1, dt * 10);
+    const turnRate = role === 'penguin' ? 10 : 3.2;               // 컴퓨터 펭귄은 천천히 돌아봄
+    P.heading += diff * Math.min(1, dt * turnRate);
   }
   P.x += Math.sin(P.heading) * P.speed * dt;
   P.z += Math.cos(P.heading) * P.speed * dt;
@@ -1476,21 +1624,45 @@ function updatePenguin(dt) {
   penguin.rotation.y = P.heading;
 }
 
-/* ---------- 모기 움직임 ---------- */
+/* ---------- 물린 자국 ---------- */
+const marks = [];
+const markGeo = new THREE.SphereGeometry(1, 20, 12);
+const markOuter = toon(0xf2a9b8);
+const ray = new THREE.Raycaster();
+function addBiteMark() {
+  penguin.updateMatrixWorld(true);
+  const aim = v3(P.x, clamp(M.pos.y, 0.5, 3.0), P.z);
+  ray.set(M.pos, aim.sub(M.pos).normalize());
+  const hit = ray.intersectObjects(penguin.userData.hitMeshes, false)[0];
+  if (!hit) return;
+  const body = penguin.userData.body;
+  const mark = new THREE.Group();
+  const n = hit.face.normal.clone().normalize();
+  mark.position.copy(body.worldToLocal(hit.point.clone())).addScaledVector(n, 0.004);
+  mark.quaternion.setFromUnitVectors(v3(0, 0, 1), n);
+  const bump = new THREE.Mesh(markGeo, markOuter); bump.scale.set(0.1, 0.1, 0.045);   // 동그란 분홍 자국 하나
+  mark.add(bump);
+  body.add(mark);
+  marks.push(mark);
+  if (marks.length > 15) marks.shift().removeFromParent();
+}
+
+/* ---------- 모기 ---------- */
 const FLY = 4.2, CLIMB = 2.6;
-const M = { pos: new THREE.Vector3(-3, 2.2, 0), vel: new THREE.Vector3(), heading: 0, bank: 0, r: 0.2 };
+const M = {
+  pos: new THREE.Vector3(-3, 2.2, 0), vel: new THREE.Vector3(), heading: 0, bank: 0, r: 0.2,
+  alive: true, respawnAt: 0, biteReadyAt: 0, spin: 0,
+  ai: { state: 'roam', until: 6, target: new THREE.Vector3(-3, 2.5, 0) },
+};
 const solids3 = room.userData.solids.map((o) => new THREE.Box3().setFromObject(o));
 mosquito.rotation.order = 'YXZ';
 
-function mosquitoAutopilot(t) {   // 내가 펭귄일 때: 혼자 빙빙
-  return v3(9 * Math.sin(t * 0.21), 2.3 + 0.9 * Math.sin(t * 0.47), 1.5 + 7 * Math.sin(t * 0.13 + 1));
-}
 function collideMosquito() {
   const { minX, maxX, minZ, maxZ, h } = ROOM, p = M.pos, r = M.r;
   p.x = clamp(p.x, minX + r, maxX - r);
   p.z = clamp(p.z, minZ + r, maxZ - r);
-  p.y = clamp(p.y, 0.25, h - r);
-  for (const b of solids3) {                        // 가구는 통과 못 함
+  p.y = clamp(p.y, 0.15, h - r);
+  for (const b of solids3) {
     const cx = clamp(p.x, b.min.x, b.max.x), cy = clamp(p.y, b.min.y, b.max.y), cz = clamp(p.z, b.min.z, b.max.z);
     const dx = p.x - cx, dy = p.y - cy, dz = p.z - cz, d2 = dx * dx + dy * dy + dz * dz;
     if (d2 >= r * r) continue;
@@ -1498,55 +1670,264 @@ function collideMosquito() {
       const d = Math.sqrt(d2), k = (r - d) / d;
       p.x += dx * k; p.y += dy * k; p.z += dz * k;
     } else {
-      p.y = b.max.y + r;                            // 가구 속에 갇히면 위로 꺼냄
+      p.y = b.max.y + r;
     }
   }
-  // 펭귄 몸도 통과 못 함 (원기둥으로 계산)
   const px = p.x - P.x, pz = p.z - P.z, pd = Math.hypot(px, pz), pr = P.r + r;
   if (p.y < 2.9 && pd < pr && pd > 1e-6) { p.x = P.x + (px / pd) * pr; p.z = P.z + (pz / pd) * pr; }
 }
 
-function updateMosquito(t, dt) {
+const nearPenguin = () => {
+  const d = Math.hypot(M.pos.x - P.x, M.pos.z - P.z);
+  return d < P.r + 0.6 && M.pos.y > 0.3 && M.pos.y < 3.0;
+};
+const inSmoke = () => t < P.smokeUntil && M.pos.distanceTo(v3(P.x, 1.5, P.z)) < RULE.smokeRange;
+
+function tryBite() {
+  if (!M.alive || t < M.biteReadyAt) return false;
+  if (!nearPenguin()) {
+    if (role === 'mosquito') say('펭귄에게 더 가까이!', 'tag', M.pos.clone().add(v3(0, 0.35, 0)), 1);
+    return false;
+  }
+  M.biteReadyAt = t + RULE.biteWait;
+  G.bites++;
+  addBiteMark();
+  P.slowUntil = t + RULE.slowTime;
+  P.itchUntil = t + 1.3;
+  P.alertUntil = t + 2.5;
+  say('아야! 간지러워!', 'bubble', () => v3(P.x, 3.55, P.z), 1.8);
+  say('+1', 'plus', M.pos.clone().add(v3(0, 0.3, 0)), 1);
+  return true;
+}
+
+function catchMosquito(at) {
+  M.alive = false;
+  M.respawnAt = t + RULE.respawn;
+  M.vel.set(0, -0.5, 0);
+  G.catches++;
+  say('잡았다!', 'pop', at.clone().add(v3(0, 0.5, 0)), 1.2);
+}
+
+function respawnMosquito() {
+  // 펭귄에게서 먼 곳 높은 데서 다시 나타남
+  let best = null, bestD = -1;
+  for (let i = 0; i < 6; i++) {
+    const s = openSpot(1.5, 0.3), d = Math.hypot(s.x - P.x, s.z - P.z);
+    if (d > bestD) { best = s; bestD = d; }
+  }
+  M.pos.set(best.x, 3.6, best.z);
+  M.vel.set(0, 0, 0);
+  M.alive = true;
+  M.spin = 0;
+  M.ai.state = 'roam'; M.ai.until = t + 4 + Math.random() * 4;
+  if (role === 'mosquito') say('다시 날아요!', 'tag', M.pos.clone().add(v3(0, 0.35, 0)), 1.2);
+}
+
+// 컴퓨터 모기 (내가 펭귄일 때): 돌아다니다가 → 몰래 뒤로 다가가 물고 → 도망
+function mosquitoBrain() {
+  const ai = M.ai;
+  const roamTarget = () => { const s = openSpot(1.5, 0.3); ai.target.set(s.x, 1.4 + Math.random() * 2.6, s.z); };
+  if (ai.state === 'roam') {
+    if (M.pos.distanceTo(ai.target) < 0.6) roamTarget();
+    if (t > ai.until) ai.state = 'approach';
+    return 2.6;
+  }
+  if (ai.state === 'approach') {
+    const back = pFwd().multiplyScalar(-(P.r + 0.35));
+    ai.target.set(P.x + back.x, 1.5 + Math.sin(t * 2) * 0.3, P.z + back.z);
+    if (t >= M.biteReadyAt && nearPenguin() && tryBite()) {
+      ai.state = 'flee'; ai.until = t + 3.5;
+      const s = openSpot(1.5, 0.3); ai.target.set(s.x, 3 + Math.random(), s.z);
+    }
+    return 3.0;
+  }
+  if (t > ai.until) { ai.state = 'roam'; ai.until = t + 5 + Math.random() * 6; roamTarget(); }
+  return 4.4;                                                   // flee
+}
+
+function updateMosquito(dt) {
   const prevHeading = M.heading;
-  if (mode === 'play' && role === 'mosquito') {
-    const inp = readInput();
-    const want = v3(inp.x * inp.amount * FLY, ((inp.up ? 1 : 0) - (inp.down ? 1 : 0)) * CLIMB, inp.z * inp.amount * FLY);
-    M.vel.lerp(want, 1 - Math.exp(-dt * 4));       // 살짝 미끄러지듯 날기
+  if (!M.alive) {
+    // 잡힌 모기: 빙글빙글 떨어져서 바닥에 누움
+    M.vel.y = Math.max(M.vel.y - 9 * dt, -6);
+    M.pos.addScaledVector(M.vel, dt);
+    if (M.pos.y < 0.12) { M.pos.y = 0.12; M.vel.set(0, 0, 0); }
+    M.spin += dt * (M.pos.y > 0.12 ? 10 : 0);
+    if (t >= M.respawnAt) respawnMosquito();
+  } else {
+    const slowK = inSmoke() ? RULE.smokeK : 1;
+    let want;
+    const player = mode === 'play' && role === 'mosquito';
+    if (player) {
+      // 비행기처럼: 위/아래 = 앞으로/뒤로, 왼쪽/오른쪽 = 방향 돌리기
+      const inp = rawInput();
+      M.heading -= inp.x * 2.3 * dt;
+      const thrust = inp.y >= 0 ? inp.y : inp.y * 0.5;
+      want = v3(Math.sin(M.heading) * thrust * FLY, ((inp.up ? 1 : 0) - (inp.down ? 1 : 0)) * CLIMB, Math.cos(M.heading) * thrust * FLY);
+    } else {
+      const speed = mode === 'play' ? mosquitoBrain() : 2.4;
+      if (mode !== 'play' && M.pos.distanceTo(M.ai.target) < 0.6) { const s = openSpot(1.5, 0.3); M.ai.target.set(s.x, 1.5 + Math.random() * 2.5, s.z); }
+      want = M.ai.target.clone().sub(M.pos);
+      const l = want.length();
+      want.multiplyScalar(l > 1e-4 ? Math.min(speed, l * 3) / l : 0);
+    }
+    want.multiplyScalar(slowK);
+    M.vel.lerp(want, 1 - Math.exp(-dt * 4));
     M.pos.addScaledVector(M.vel, dt);
     collideMosquito();
     const hs = Math.hypot(M.vel.x, M.vel.z);
-    if (hs > 0.25) {
+    if (!player && hs > 0.25) {
       const wantH = Math.atan2(M.vel.x, M.vel.z);
       M.heading += Math.atan2(Math.sin(wantH - M.heading), Math.cos(wantH - M.heading)) * Math.min(1, dt * 8);
     }
-  } else {
-    const next = mosquitoAutopilot(t);
-    const vx = next.x - M.pos.x, vz = next.z - M.pos.z;
-    if (vx * vx + vz * vz > 1e-8) M.heading = Math.atan2(vx, vz);
-    if (dt > 0) M.vel.copy(next).sub(M.pos).divideScalar(dt);
-    M.pos.copy(next);
   }
-  // 몸 방향: 모델의 머리는 -x 쪽
   const turn = dt > 0 ? Math.atan2(Math.sin(M.heading - prevHeading), Math.cos(M.heading - prevHeading)) / dt : 0;
   M.bank += (clamp(-turn * 0.12, -0.6, 0.6) - M.bank) * Math.min(1, dt * 6);
   mosquito.position.copy(M.pos);
   mosquito.rotation.y = Math.atan2(Math.cos(M.heading), -Math.sin(M.heading));
-  mosquito.rotation.x = M.bank;
-  mosquito.rotation.z = clamp(-M.vel.y * 0.15, -0.4, 0.4);
+  mosquito.rotation.x = M.alive ? M.bank : M.spin;
+  mosquito.rotation.z = M.alive ? clamp(-M.vel.y * 0.15, -0.4, 0.4) : Math.PI * 0.5;
+}
+
+/* ---------- 모기향 아이템 ---------- */
+const coils = [];
+let nextCoilAt = 6;
+const coilGeo = (() => {
+  const pts = [];
+  for (let a = 0; a <= Math.PI * 6; a += 0.08) {
+    const r = 0.07 + (a / (Math.PI * 6)) * 0.3;
+    pts.push(v3(Math.cos(a) * r, 0.1, Math.sin(a) * r));
+  }
+  return new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 240, 0.032, 6);
+})();
+const puffMat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.45, depthWrite: false });
+const puffGeo = new THREE.SphereGeometry(1, 16, 10);
+function makeCoil() {
+  const g = new THREE.Group();
+  put(g, new THREE.CylinderGeometry(0.46, 0.5, 0.06, 32), 0xbdbdbd, [0, 0.03, 0], { outline: 0.01 });
+  put(g, coilGeo, 0x5f8f4e, [0, 0, 0], { outline: 0.008 });
+  put(g, new THREE.CylinderGeometry(0.02, 0.02, 0.2, 8), 0x8a8a8a, [0, 0.1, 0], { outline: 0 });
+  const glow = new THREE.Mesh(new THREE.RingGeometry(0.7, 0.8, 48).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0xf6d36b, transparent: true, opacity: 0.8, depthWrite: false }));
+  glow.position.y = 0.02;
+  g.add(glow);
+  const puffs = [];
+  for (let i = 0; i < 3; i++) { const p = new THREE.Mesh(puffGeo, puffMat); g.add(p); puffs.push(p); }
+  g.userData = { glow, puffs };
+  g.scale.setScalar(1.3);
+  return g;
+}
+function updateCoils(dt) {
+  if (mode === 'play' && t > nextCoilAt && coils.length < 2) {
+    const s = openSpot(2.5, 1.4);
+    const c = makeCoil();
+    c.position.set(s.x, 0, s.z);
+    scene.add(c);
+    coils.push({ obj: c, born: t });
+    nextCoilAt = t + RULE.coilEvery;
+  }
+  for (let i = coils.length - 1; i >= 0; i--) {
+    const c = coils[i], u = c.obj.userData;
+    c.obj.rotation.y += dt * 0.6;
+    u.glow.material.opacity = 0.45 + Math.sin(t * 4) * 0.3;
+    u.puffs.forEach((p, k) => {
+      const f = (t * 0.5 + k / 3) % 1;
+      p.position.set(Math.sin(f * 6 + k) * 0.08, 0.2 + f * 1.2, 0);
+      p.scale.setScalar(0.07 + f * 0.12);
+    });
+    if (Math.hypot(c.obj.position.x - P.x, c.obj.position.z - P.z) < 1.4 && t - c.born > 0.5) {
+      c.obj.removeFromParent();
+      coils.splice(i, 1);
+      P.smokeUntil = t + RULE.smokeTime;
+      say('모기향!', 'tag', () => v3(P.x, 3.5, P.z), 1.5);
+    }
+  }
+}
+// 펭귄 둘레를 도는 연기
+const smoke = new THREE.Group();
+scene.add(smoke);
+const smokePuffs = Array.from({ length: 12 }, () => { const m = new THREE.Mesh(puffGeo, puffMat); smoke.add(m); return m; });
+function updateSmoke() {
+  const on = t < P.smokeUntil;
+  smoke.visible = on;
+  if (!on) return;
+  const fade = Math.min(1, (P.smokeUntil - t) / 1.5);
+  smokePuffs.forEach((m, i) => {
+    const f = (t * 0.35 + i / smokePuffs.length) % 1;
+    const a = i * 2.4 + t * 0.7;
+    const r = 1.6 + Math.sin(i * 1.7 + t) * 0.4 + f * 0.6;
+    m.position.set(P.x + Math.cos(a) * r, 0.3 + f * 2.8, P.z + Math.sin(a) * r);
+    m.scale.setScalar((0.18 + f * 0.3) * fade * (1 - f * 0.5));
+  });
+}
+
+/* ---------- 판 시작 ---------- */
+function resetRound() {
+  G.bites = 0; G.catches = 0;
+  marks.forEach((m) => m.removeFromParent()); marks.length = 0;
+  coils.forEach((c) => c.obj.removeFromParent()); coils.length = 0;
+  nextCoilAt = t + 6;
+  Object.assign(P, { clapAt: -9, slowUntil: 0, itchUntil: 0, smokeUntil: 0, aiClapAt: 0, alertUntil: 0 });
+  if (!M.alive) respawnMosquito();
+  M.biteReadyAt = 0;
+  M.ai.state = 'roam'; M.ai.until = t + 5;
+}
+
+/* ---------- 점수판, 안내 문구, 버튼 상태 ---------- */
+let lastStatus = '', lastScore = '', lastBite = '';
+function updateHud() {
+  if (mode !== 'play') return;
+  const score = `물기 <b>${G.bites}</b> · 잡기 <b>${G.catches}</b>`;
+  if (score !== lastScore) { $('#score').innerHTML = score; lastScore = score; }
+  let st = '';
+  if (role === 'mosquito') {
+    if (!M.alive) st = `잡혔어요! ${Math.ceil(M.respawnAt - t)}초 뒤에 다시 날아요`;
+    else if (inSmoke()) st = '모기향 연기 때문에 느려졌어요';
+    const left = Math.ceil(M.biteReadyAt - t);
+    const biteTxt = M.alive && left > 0 ? String(left) : '물기';
+    if (biteTxt !== lastBite) {
+      $('#bite').textContent = biteTxt;
+      $('#bite').classList.toggle('wait', biteTxt !== '물기');
+      lastBite = biteTxt;
+    }
+  } else {
+    if (t < P.slowUntil) st = '간지러워서 잠깐 느려졌어요';
+    else if (t < P.smokeUntil) st = `모기향 연기 ${Math.ceil(P.smokeUntil - t)}초`;
+  }
+  if (st !== lastStatus) { $('#status').textContent = st; lastStatus = st; }
 }
 
 /* ---------- 카메라 ---------- */
 const camGoal = new THREE.Vector3(), lookGoal = new THREE.Vector3(), lookNow = new THREE.Vector3(0, 1.5, 1);
-function updateCamera(t, dt) {
+function updateCamera(dt) {
   const { minX, maxX, minZ, maxZ, h } = ROOM;
   if (mode === 'title') {
     const a = t * 0.07;
     camGoal.set(Math.sin(a) * 15, 5.5, 1.5 + Math.cos(a) * 15);
     lookGoal.set(0, 0.6, 1.5);
+  } else if (role === 'mosquito' && M.alive) {
+    // 모기 등 뒤 살짝 위에 카메라를 얹고, 모기가 향한 앞쪽을 봄
+    if (lookId === null) {                                   // 손을 떼면 다시 앞으로
+      view.lookYaw *= Math.exp(-dt * 3);
+      view.lookPitch *= Math.exp(-dt * 3);
+    }
+    const yaw = M.heading + view.lookYaw;
+    const fx = Math.sin(yaw), fz = Math.cos(yaw);
+    const back = 1.75, up = 0.5 + view.lookPitch * 0.8;
+    camGoal.set(M.pos.x - fx * back, M.pos.y + up, M.pos.z - fz * back);
+    camGoal.x = clamp(camGoal.x, minX + 0.15, maxX - 0.15);
+    camGoal.z = clamp(camGoal.z, minZ + 0.15, maxZ - 0.15);
+    camGoal.y = clamp(camGoal.y, 0.2, h - 0.15);
+    lookGoal.set(M.pos.x + fx * 4, M.pos.y - 0.3 - view.lookPitch * 2, M.pos.z + fz * 4);
+    const k = 1 - Math.exp(-dt * 9);
+    camera.position.lerp(camGoal, k);
+    lookNow.lerp(lookGoal, k);
+    camera.lookAt(lookNow);
+    return;
   } else {
     const me = role === 'penguin'
       ? { x: P.x, y: 2.3, z: P.z, dist: 9.5, lift: 1.7 }
-      : { x: M.pos.x, y: M.pos.y + 0.15, z: M.pos.z, dist: 2.6, lift: M.pos.y + 0.2 };
+      : { x: M.pos.x, y: M.pos.y + 0.15, z: M.pos.z, dist: 4, lift: M.pos.y + 0.2 };
     const c = Math.cos(view.pitch);
     camGoal.set(
       me.x + Math.sin(view.yaw) * c * me.dist,
@@ -1564,6 +1945,7 @@ function updateCamera(t, dt) {
 }
 
 /* ---------- 실행 ---------- */
+let t = 0;
 const params = new URLSearchParams(location.search);
 if (params.get('as')) startAs(params.get('as'));          // 확인용: ?as=mosquito
 if (params.get('move')) {                                  // 확인용: ?move=x,y,run
@@ -1578,18 +1960,68 @@ addEventListener('resize', () => {
   renderer.setSize(innerWidth, innerHeight);
 });
 
+// 확인용 자동 점검: ?selftest (결과는 탭 제목에 표시)
+if (params.has('selftest')) {
+  const out = [];
+  const ok = (name, v) => out.push((v ? 'OK ' : 'FAIL ') + name);
+  const step = (sec) => { for (let i = 0; i < sec * 30; i++) { t += 1 / 30; updatePenguin(1 / 30); updateMosquito(1 / 30); updateCoils(1 / 30); } };
+  startAs('mosquito');
+  P.x = 0; P.z = 0; P.heading = 0;
+  M.pos.set(0, 1.6, -1.3);                                   // 펭귄 등 뒤
+  ok('bite', tryBite() && G.bites === 1 && marks.length === 1 && t < P.slowUntil);
+  ok('bite wait 5s', !tryBite());
+  t += 5.1; M.pos.set(0, 1.6, -1.3);
+  ok('bite again after 5s', tryBite() && G.bites === 2);
+  M.pos.copy(clapPoint()); P.clapAt = -9; clap();
+  ok('clap catches', !M.alive && G.catches === 1);
+  step(RULE.respawn + 0.2);
+  ok('respawn', M.alive);
+  M.pos.set(8, 2, 8); P.clapAt = -9; clap();
+  ok('clap misses far mosquito', M.alive && G.catches === 1);
+  P.x = 0; P.z = 0; P.heading = 0; P.alertUntil = 0; P.aiClapAt = 0; P.clapAt = -9; wander.wait = 99;
+  M.pos.set(0, 1.6, -1.3); M.vel.set(0, 0, 0); M.biteReadyAt = t + 99;
+  for (let i = 0; i < 60; i++) { t += 1 / 30; updatePenguin(1 / 30); }
+  ok(`AI penguin ignores mosquito behind (alive=${M.alive} clap=${P.clapAt.toFixed(1)} h=${P.heading.toFixed(2)})`, M.alive && P.clapAt < 0 && Math.abs(P.heading) < 0.01);
+  M.pos.copy(clapPoint());
+  for (let i = 0; i < 12; i++) { t += 1 / 30; updatePenguin(1 / 30); }
+  ok('AI clap waits before clapping', M.alive);
+  coils.forEach((c) => c.obj.removeFromParent()); coils.length = 0;
+  nextCoilAt = t - 1; role = 'penguin'; updateCoils(0);
+  const c = coils[0]; ok('coil spawns', !!c);
+  t += 1; P.x = c.obj.position.x; P.z = c.obj.position.z; updateCoils(0);
+  ok('coil picked → smoke', coils.length === 0 && t < P.smokeUntil);
+  M.pos.set(P.x + 1, 1.5, P.z); ok('smoke slows mosquito', inSmoke());
+  document.title = out.join(' | ');
+}
+
+if (params.has('demo')) {                                  // 확인용 장면: 물린 자국, 말풍선, 모기향
+  startAs('penguin');
+  P.x = 0; P.z = 2; P.heading = 0.5; view.yaw = 0.5;
+  for (const [x, y] of [[-0.5, 1.3], [0.45, 1.0], [0.6, 1.8]]) {
+    M.pos.set(P.x + Math.cos(0.5) * x + Math.sin(0.5) * 1.3, y, P.z - Math.sin(0.5) * x + Math.cos(0.5) * 1.3); M.biteReadyAt = 0; tryBite();
+  }
+  M.pos.set(P.x - 1.2, 2.3, P.z + 2.2);
+  nextCoilAt = t - 1; updateCoils(0); coils[0].obj.position.set(P.x + 2.5, 0, P.z - 1.5);
+  P.smokeUntil = 1e9;
+}
+
 const clock = new THREE.Clock();
-let t = 0;
-updateMosquito(0, 0);
-updateCamera(0, 10);
+updateMosquito(0);
+updateCamera(10);
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   t += dt;
   updatePenguin(dt);
-  updateMosquito(t, dt);
+  updateMosquito(dt);
+  updateCoils(dt);
+  updateSmoke();
   mosquito.userData.update(t);
-  penguin.userData.update(t, clamp(P.speed / WALK, 0, 1.4), P.phase);
-  updateCamera(t, dt);
+  const clapK = t - P.clapAt < 0.35 ? (t - P.clapAt) / 0.35 : 0;
+  const itch = t < P.itchUntil ? 1 : 0;
+  penguin.userData.update(t, clamp(P.speed / WALK, 0, 1.4), P.phase, { clap: clapK, itch });
+  updateCamera(dt);
+  updateLabels();
+  updateHud();
   renderer.render(scene, camera);
 });
 </script>
