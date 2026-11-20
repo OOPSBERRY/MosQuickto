@@ -45,6 +45,16 @@
     border: 0; border-radius: 6px; padding: 15px; cursor: pointer;
   }
   #enter:active { background: #000; }
+  #pick h2 { font-size: 24px; font-weight: 300; }
+  .roles { margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .roles button {
+    font: inherit; color: var(--ink); background: #fff;
+    border: 1px solid var(--line); border-radius: 6px; padding: 20px 10px; cursor: pointer;
+  }
+  .roles button:active { border-color: var(--accent); }
+  .roles .big { display: block; font-size: 21px; font-weight: 400; }
+  .roles .sub { display: block; margin-top: 8px; font-size: 13px; line-height: 1.5; color: var(--muted); }
+  #pickBack { margin-top: 18px; font: inherit; font-size: 14px; color: var(--muted); background: none; border: 0; padding: 6px 12px; cursor: pointer; }
 
   /* 게임 화면 조작 */
   #back {
@@ -76,10 +86,18 @@
     border-radius: 50%; font: inherit; font-size: 16px; font-weight: 400; color: var(--ink);
     background: rgba(251, 247, 240, 0.88); border: 1px solid var(--line); touch-action: none;
   }
-  #run.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #run.on, #flyBtns button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  #flyBtns { position: fixed; right: 28px; bottom: 28px; display: flex; flex-direction: column; gap: 14px; }
+  #flyBtns button {
+    width: 92px; height: 92px; border-radius: 50%;
+    font: inherit; font-size: 16px; font-weight: 400; color: var(--ink);
+    background: rgba(251, 247, 240, 0.88); border: 1px solid var(--line); touch-action: none;
+  }
   @media (max-width: 600px) {
     #stick { left: 16px; bottom: 16px; width: 128px; height: 128px; }
     #run { right: 16px; bottom: 28px; width: 92px; height: 92px; }
+    #flyBtns { right: 16px; bottom: 16px; gap: 10px; }
+    #flyBtns button { width: 78px; height: 78px; }
     #hint { top: 64px; max-width: calc(100% - 32px); }
   }
 </style>
@@ -95,18 +113,29 @@
 
 <section id="title">
   <div class="card">
-    <h1>모스큌토</h1>
-    <div class="en">MOSQUICKTO</div>
-    <p class="desc">펭귄이 되어 모기를 잡거나,<br>모기가 되어 몰래 펭귄을 물어라!</p>
-    <button id="enter">입장하기</button>
+    <div id="intro">
+      <h1>모스큌토</h1>
+      <div class="en">MOSQUICKTO</div>
+      <p class="desc">펭귄이 되어 모기를 잡거나,<br>모기가 되어 몰래 펭귄을 물어라!</p>
+      <button id="enter">입장하기</button>
+    </div>
+    <div id="pick" class="hidden">
+      <h2>누가 될래요?</h2>
+      <div class="roles">
+        <button data-role="penguin"><span class="big">펭귄</span><span class="sub">걷고 뛰면서<br>모기를 잡아요</span></button>
+        <button data-role="mosquito"><span class="big">모기</span><span class="sub">날아다니며<br>몰래 펭귄을 물어요</span></button>
+      </div>
+      <button id="pickBack">뒤로</button>
+    </div>
   </div>
 </section>
 
 <section id="hud" class="hidden">
   <button id="back">처음으로</button>
-  <div id="hint">왼쪽 동그라미를 끌면 걸어요 · 달리기를 누르고 있으면 뛰어요<br>빈 화면을 밀면 둘러볼 수 있어요 (키보드: 방향키, Shift)</div>
+  <div id="hint"></div>
   <div id="stick"><div id="knob"></div></div>
   <button id="run">달리기</button>
+  <div id="flyBtns"><button id="up">위로</button><button id="down">아래로</button></div>
 </section>
 
 <script type="module">
@@ -1268,29 +1297,52 @@ scene.add(penguin);
 
 /* ---------- 화면 전환 ---------- */
 const $ = (s) => document.querySelector(s);
-let mode = 'title';
+let mode = 'title';            // title | play
+let role = 'penguin';          // 내가 조종하는 캐릭터
 let hintTimer = 0;
+const HINTS = {
+  penguin: '왼쪽 동그라미를 끌면 걸어요 · 달리기를 누르고 있으면 뛰어요<br>빈 화면을 밀면 둘러볼 수 있어요 (키보드: 방향키, Shift)',
+  mosquito: '왼쪽 동그라미로 날아다녀요 · 위로/아래로를 누르고 있으면 높이가 바뀌어요<br>빈 화면을 밀면 둘러볼 수 있어요 (키보드: 방향키, 스페이스 위로, Shift 아래로)',
+};
 function setMode(m) {
   mode = m;
   $('#title').classList.toggle('hidden', m !== 'title');
   $('#hud').classList.toggle('hidden', m !== 'play');
+  $('#intro').classList.remove('hidden');
+  $('#pick').classList.add('hidden');
   if (m === 'play') {
+    $('#run').classList.toggle('hidden', role !== 'penguin');
+    $('#flyBtns').classList.toggle('hidden', role !== 'mosquito');
+    $('#hint').innerHTML = HINTS[role];
     $('#hint').style.opacity = 1;
     clearTimeout(hintTimer);
     hintTimer = setTimeout(() => { $('#hint').style.opacity = 0; }, 7000);
   }
 }
 $('#enter').addEventListener('click', () => {
-  // 지금 카메라가 있는 쪽에서 펭귄 뒤로 자연스럽게 이어지게
-  view.yaw = Math.atan2(camera.position.x - P.x, camera.position.z - P.z);
-  P.heading = view.yaw + Math.PI;
-  setMode('play');
+  $('#intro').classList.add('hidden');
+  $('#pick').classList.remove('hidden');
 });
+$('#pickBack').addEventListener('click', () => setMode('title'));
+document.querySelectorAll('.roles button').forEach((b) => b.addEventListener('click', () => startAs(b.dataset.role)));
 $('#back').addEventListener('click', () => setMode('title'));
 
-/* ---------- 입력: 조이스틱, 달리기 버튼, 키보드, 화면 밀기 ---------- */
+function startAs(r) {
+  role = r;
+  // 지금 카메라가 있는 쪽에서 내 캐릭터 뒤로 자연스럽게 이어지게
+  const me = r === 'penguin' ? { x: P.x, z: P.z } : { x: M.pos.x, z: M.pos.z };
+  view.yaw = Math.atan2(camera.position.x - me.x, camera.position.z - me.z);
+  if (r === 'penguin') P.heading = view.yaw + Math.PI;
+  else M.heading = view.yaw + Math.PI;
+  setMode('play');
+}
+
+/* ---------- 입력: 조이스틱, 버튼, 키보드, 화면 밀기 ---------- */
 const keys = new Set();
-addEventListener('keydown', (e) => keys.add(e.code));
+addEventListener('keydown', (e) => {
+  keys.add(e.code);
+  if (e.code === 'Space' && mode === 'play') e.preventDefault();
+});
 addEventListener('keyup', (e) => keys.delete(e.code));
 addEventListener('blur', () => keys.clear());
 
@@ -1315,14 +1367,19 @@ const endStick = (e) => {
 stick.addEventListener('pointerup', endStick);
 stick.addEventListener('pointercancel', endStick);
 
-const runBtn = $('#run');
-let runHeld = false;
-runBtn.addEventListener('pointerdown', (e) => { runHeld = true; runBtn.classList.add('on'); runBtn.setPointerCapture(e.pointerId); });
-const runUp = () => { runHeld = false; runBtn.classList.remove('on'); };
-runBtn.addEventListener('pointerup', runUp);
-runBtn.addEventListener('pointercancel', runUp);
+// 누르고 있는 동안만 켜지는 버튼
+const held = { run: false, up: false, down: false };
+function holdButton(el, name) {
+  el.addEventListener('pointerdown', (e) => { held[name] = true; el.classList.add('on'); el.setPointerCapture(e.pointerId); });
+  const off = () => { held[name] = false; el.classList.remove('on'); };
+  el.addEventListener('pointerup', off);
+  el.addEventListener('pointercancel', off);
+}
+holdButton($('#run'), 'run');
+holdButton($('#up'), 'up');
+holdButton($('#down'), 'down');
 
-const view = { yaw: 0, pitch: 0.32, dist: 9.5 };
+const view = { yaw: 0, pitch: 0.32 };
 let lookId = null, lastX = 0, lastY = 0;
 const cvs = renderer.domElement;
 cvs.addEventListener('pointerdown', (e) => {
@@ -1333,13 +1390,14 @@ cvs.addEventListener('pointerdown', (e) => {
 cvs.addEventListener('pointermove', (e) => {
   if (e.pointerId !== lookId) return;
   view.yaw -= (e.clientX - lastX) * 0.006;
-  view.pitch = clamp(view.pitch + (e.clientY - lastY) * 0.004, 0.05, 0.95);
+  view.pitch = clamp(view.pitch + (e.clientY - lastY) * 0.004, -0.3, 0.95);
   lastX = e.clientX; lastY = e.clientY;
 });
 const endLook = (e) => { if (e.pointerId === lookId) lookId = null; };
 cvs.addEventListener('pointerup', endLook);
 cvs.addEventListener('pointercancel', endLook);
 
+// 조이스틱/방향키 → 카메라 기준 방향을 방 안의 방향으로
 function readInput() {
   let x = stickV.x, y = stickV.y;
   if (keys.has('ArrowLeft') || keys.has('KeyA')) x -= 1;
@@ -1348,67 +1406,133 @@ function readInput() {
   if (keys.has('ArrowDown') || keys.has('KeyS')) y -= 1;
   const l = Math.hypot(x, y);
   if (l > 1) { x /= l; y /= l; }
-  return { x, y, amount: Math.min(l, 1), run: runHeld || keys.has('ShiftLeft') || keys.has('ShiftRight') };
+  const fx = -Math.sin(view.yaw), fz = -Math.cos(view.yaw);
+  const rx = Math.cos(view.yaw), rz = -Math.sin(view.yaw);
+  return {
+    x: rx * x + fx * y, z: rz * x + fz * y, amount: Math.min(l, 1),
+    run: held.run || keys.has('ShiftLeft') || keys.has('ShiftRight'),
+    up: held.up || keys.has('Space') || keys.has('KeyE'),
+    down: held.down || keys.has('ShiftLeft') || keys.has('ShiftRight') || keys.has('KeyQ'),
+  };
 }
+const NO_INPUT = { x: 0, z: 0, amount: 0, run: false, up: false, down: false };
 
 /* ---------- 펭귄 움직임 ---------- */
 const WALK = 3.2, RUN = 6.5;
 const P = { x: 0, z: 1.5, heading: 0, speed: 0, phase: 0, r: 0.95 };
 
-function collide() {
+function pushOutOfBoxes(o) {
   const { minX, maxX, minZ, maxZ } = ROOM;
-  P.x = clamp(P.x, minX + P.r, maxX - P.r);
-  P.z = clamp(P.z, minZ + P.r, maxZ - P.r);
+  o.x = clamp(o.x, minX + o.r, maxX - o.r);
+  o.z = clamp(o.z, minZ + o.r, maxZ - o.r);
   for (const s of solids) {
-    const cx = clamp(P.x, s.x0, s.x1), cz = clamp(P.z, s.z0, s.z1);
-    const dx = P.x - cx, dz = P.z - cz, d2 = dx * dx + dz * dz;
-    if (d2 >= P.r * P.r) continue;
+    const cx = clamp(o.x, s.x0, s.x1), cz = clamp(o.z, s.z0, s.z1);
+    const dx = o.x - cx, dz = o.z - cz, d2 = dx * dx + dz * dz;
+    if (d2 >= o.r * o.r) continue;
     if (d2 > 1e-8) {
       const d = Math.sqrt(d2);
-      P.x += (dx / d) * (P.r - d); P.z += (dz / d) * (P.r - d);
+      o.x += (dx / d) * (o.r - d); o.z += (dz / d) * (o.r - d);
     } else {
-      const push = [[P.x - s.x0 + P.r, -1, 0], [s.x1 - P.x + P.r, 1, 0], [P.z - s.z0 + P.r, 0, -1], [s.z1 - P.z + P.r, 0, 1]]
+      const push = [[o.x - s.x0 + o.r, -1, 0], [s.x1 - o.x + o.r, 1, 0], [o.z - s.z0 + o.r, 0, -1], [s.z1 - o.z + o.r, 0, 1]]
         .sort((a, b) => a[0] - b[0])[0];
-      P.x += push[1] * push[0]; P.z += push[2] * push[0];
+      o.x += push[1] * push[0]; o.z += push[2] * push[0];
     }
   }
 }
 
+// 내가 모기일 때 펭귄은 혼자 방을 돌아다님
+const wander = { tx: 0, tz: 0, wait: 0, stuck: 0 };
+function pickSpot() {
+  const { minX, maxX, minZ, maxZ } = ROOM;
+  for (let i = 0; i < 30; i++) {
+    const x = lerp(minX + 2, maxX - 2, Math.random()), z = lerp(minZ + 2, maxZ - 2, Math.random());
+    if (!solids.some((s) => x > s.x0 - 1.2 && x < s.x1 + 1.2 && z > s.z0 - 1.2 && z < s.z1 + 1.2)) { wander.tx = x; wander.tz = z; return; }
+  }
+}
+pickSpot();
+function penguinBrain(dt) {
+  if (wander.wait > 0) { wander.wait -= dt; return NO_INPUT; }
+  const dx = wander.tx - P.x, dz = wander.tz - P.z, d = Math.hypot(dx, dz);
+  wander.stuck = P.speed < 0.3 ? wander.stuck + dt : 0;
+  if (d < 0.6 || wander.stuck > 1.5) { pickSpot(); wander.wait = 1 + Math.random() * 2.5; wander.stuck = 0; return NO_INPUT; }
+  return { ...NO_INPUT, x: dx / d, z: dz / d, amount: 1 };
+}
+
 function updatePenguin(dt) {
-  const inp = mode === 'play' ? readInput() : { x: 0, y: 0, amount: 0, run: false };
-  // 카메라 기준 앞/오른쪽
-  const fx = -Math.sin(view.yaw), fz = -Math.cos(view.yaw);
-  const rx = Math.cos(view.yaw), rz = -Math.sin(view.yaw);
-  let mx = rx * inp.x + fx * inp.y, mz = rz * inp.x + fz * inp.y;
-  const ml = Math.hypot(mx, mz);
+  const inp = mode !== 'play' ? NO_INPUT : role === 'penguin' ? readInput() : penguinBrain(dt);
+  const ml = Math.hypot(inp.x, inp.z);
   const target = ml > 0.05 ? inp.amount * (inp.run ? RUN : WALK) : 0;
   P.speed += (target - P.speed) * Math.min(1, dt * 8);
   if (ml > 0.05) {
-    mx /= ml; mz /= ml;
-    const want = Math.atan2(mx, mz);
-    let diff = want - P.heading;
-    diff = Math.atan2(Math.sin(diff), Math.cos(diff));
+    const want = Math.atan2(inp.x, inp.z);
+    const diff = Math.atan2(Math.sin(want - P.heading), Math.cos(want - P.heading));
     P.heading += diff * Math.min(1, dt * 10);
   }
   P.x += Math.sin(P.heading) * P.speed * dt;
   P.z += Math.cos(P.heading) * P.speed * dt;
-  collide();
+  pushOutOfBoxes(P);
   P.phase += dt * P.speed * 2.4;
-
   penguin.position.set(P.x, 0.02, P.z);
   penguin.rotation.y = P.heading;
 }
 
-/* ---------- 모기: 지금은 방 안을 혼자 날아다님 ---------- */
-const mPrev = new THREE.Vector3();
-function updateMosquito(t) {
-  mPrev.copy(mosquito.position);
-  mosquito.position.set(
-    9 * Math.sin(t * 0.21),
-    2.3 + 0.9 * Math.sin(t * 0.47),
-    1.5 + 7 * Math.sin(t * 0.13 + 1));
-  const vx = mosquito.position.x - mPrev.x, vz = mosquito.position.z - mPrev.z;
-  if (vx * vx + vz * vz > 1e-8) mosquito.rotation.y = Math.atan2(vz, -vx);
+/* ---------- 모기 움직임 ---------- */
+const FLY = 4.2, CLIMB = 2.6;
+const M = { pos: new THREE.Vector3(-3, 2.2, 0), vel: new THREE.Vector3(), heading: 0, bank: 0, r: 0.2 };
+const solids3 = room.userData.solids.map((o) => new THREE.Box3().setFromObject(o));
+mosquito.rotation.order = 'YXZ';
+
+function mosquitoAutopilot(t) {   // 내가 펭귄일 때: 혼자 빙빙
+  return v3(9 * Math.sin(t * 0.21), 2.3 + 0.9 * Math.sin(t * 0.47), 1.5 + 7 * Math.sin(t * 0.13 + 1));
+}
+function collideMosquito() {
+  const { minX, maxX, minZ, maxZ, h } = ROOM, p = M.pos, r = M.r;
+  p.x = clamp(p.x, minX + r, maxX - r);
+  p.z = clamp(p.z, minZ + r, maxZ - r);
+  p.y = clamp(p.y, 0.25, h - r);
+  for (const b of solids3) {                        // 가구는 통과 못 함
+    const cx = clamp(p.x, b.min.x, b.max.x), cy = clamp(p.y, b.min.y, b.max.y), cz = clamp(p.z, b.min.z, b.max.z);
+    const dx = p.x - cx, dy = p.y - cy, dz = p.z - cz, d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 >= r * r) continue;
+    if (d2 > 1e-8) {
+      const d = Math.sqrt(d2), k = (r - d) / d;
+      p.x += dx * k; p.y += dy * k; p.z += dz * k;
+    } else {
+      p.y = b.max.y + r;                            // 가구 속에 갇히면 위로 꺼냄
+    }
+  }
+  // 펭귄 몸도 통과 못 함 (원기둥으로 계산)
+  const px = p.x - P.x, pz = p.z - P.z, pd = Math.hypot(px, pz), pr = P.r + r;
+  if (p.y < 2.9 && pd < pr && pd > 1e-6) { p.x = P.x + (px / pd) * pr; p.z = P.z + (pz / pd) * pr; }
+}
+
+function updateMosquito(t, dt) {
+  const prevHeading = M.heading;
+  if (mode === 'play' && role === 'mosquito') {
+    const inp = readInput();
+    const want = v3(inp.x * inp.amount * FLY, ((inp.up ? 1 : 0) - (inp.down ? 1 : 0)) * CLIMB, inp.z * inp.amount * FLY);
+    M.vel.lerp(want, 1 - Math.exp(-dt * 4));       // 살짝 미끄러지듯 날기
+    M.pos.addScaledVector(M.vel, dt);
+    collideMosquito();
+    const hs = Math.hypot(M.vel.x, M.vel.z);
+    if (hs > 0.25) {
+      const wantH = Math.atan2(M.vel.x, M.vel.z);
+      M.heading += Math.atan2(Math.sin(wantH - M.heading), Math.cos(wantH - M.heading)) * Math.min(1, dt * 8);
+    }
+  } else {
+    const next = mosquitoAutopilot(t);
+    const vx = next.x - M.pos.x, vz = next.z - M.pos.z;
+    if (vx * vx + vz * vz > 1e-8) M.heading = Math.atan2(vx, vz);
+    if (dt > 0) M.vel.copy(next).sub(M.pos).divideScalar(dt);
+    M.pos.copy(next);
+  }
+  // 몸 방향: 모델의 머리는 -x 쪽
+  const turn = dt > 0 ? Math.atan2(Math.sin(M.heading - prevHeading), Math.cos(M.heading - prevHeading)) / dt : 0;
+  M.bank += (clamp(-turn * 0.12, -0.6, 0.6) - M.bank) * Math.min(1, dt * 6);
+  mosquito.position.copy(M.pos);
+  mosquito.rotation.y = Math.atan2(Math.cos(M.heading), -Math.sin(M.heading));
+  mosquito.rotation.x = M.bank;
+  mosquito.rotation.z = clamp(-M.vel.y * 0.15, -0.4, 0.4);
 }
 
 /* ---------- 카메라 ---------- */
@@ -1420,15 +1544,18 @@ function updateCamera(t, dt) {
     camGoal.set(Math.sin(a) * 15, 5.5, 1.5 + Math.cos(a) * 15);
     lookGoal.set(0, 0.6, 1.5);
   } else {
+    const me = role === 'penguin'
+      ? { x: P.x, y: 2.3, z: P.z, dist: 9.5, lift: 1.7 }
+      : { x: M.pos.x, y: M.pos.y + 0.15, z: M.pos.z, dist: 2.6, lift: M.pos.y + 0.2 };
     const c = Math.cos(view.pitch);
     camGoal.set(
-      P.x + Math.sin(view.yaw) * c * view.dist,
-      1.7 + Math.sin(view.pitch) * view.dist,
-      P.z + Math.cos(view.yaw) * c * view.dist);
-    camGoal.x = clamp(camGoal.x, minX + 0.4, maxX - 0.4);
-    camGoal.z = clamp(camGoal.z, minZ + 0.4, maxZ - 0.4);
-    camGoal.y = clamp(camGoal.y, 0.6, h - 0.4);
-    lookGoal.set(P.x, 2.3, P.z);
+      me.x + Math.sin(view.yaw) * c * me.dist,
+      me.lift + Math.sin(view.pitch) * me.dist,
+      me.z + Math.cos(view.yaw) * c * me.dist);
+    camGoal.x = clamp(camGoal.x, minX + 0.3, maxX - 0.3);
+    camGoal.z = clamp(camGoal.z, minZ + 0.3, maxZ - 0.3);
+    camGoal.y = clamp(camGoal.y, 0.3, h - 0.3);
+    lookGoal.set(me.x, me.y, me.z);
   }
   const k = 1 - Math.exp(-dt * 5);
   camera.position.lerp(camGoal, k);
@@ -1438,10 +1565,10 @@ function updateCamera(t, dt) {
 
 /* ---------- 실행 ---------- */
 const params = new URLSearchParams(location.search);
-if (params.has('play')) setMode('play');
-if (params.get('move')) {                       // 확인용: ?move=x,y,run
+if (params.get('as')) startAs(params.get('as'));          // 확인용: ?as=mosquito
+if (params.get('move')) {                                  // 확인용: ?move=x,y,run
   const [x, y, r] = params.get('move').split(',').map(Number);
-  stickV.x = x; stickV.y = y; runHeld = !!r;
+  stickV.x = x; stickV.y = y; held.run = !!r;
 }
 if (params.get('yaw')) view.yaw = Number(params.get('yaw'));
 
@@ -1453,12 +1580,13 @@ addEventListener('resize', () => {
 
 const clock = new THREE.Clock();
 let t = 0;
+updateMosquito(0, 0);
 updateCamera(0, 10);
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.05);
   t += dt;
   updatePenguin(dt);
-  updateMosquito(t);
+  updateMosquito(t, dt);
   mosquito.userData.update(t);
   penguin.userData.update(t, clamp(P.speed / WALK, 0, 1.4), P.phase);
   updateCamera(t, dt);
